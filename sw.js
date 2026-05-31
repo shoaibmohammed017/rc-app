@@ -1,7 +1,7 @@
 /* RC Manager service worker — NETWORK-FIRST (per BCH rulebook).
    Always tries the network so updates show immediately; falls back to
    cache only when offline. Bump CACHE on every deploy to evict old files. */
-const CACHE = "rc-manager-v7";
+const CACHE = "rc-manager-v8";
 const ASSETS = [
   "./",
   "./index.html",

@@ -310,3 +310,18 @@ td.num,th.num{ text-align:right }
 @media(min-width:861px){
   .bottomnav,.fab{ display:none !important }
 }
+
+/* ---------- Multi-model Purchase Order ---------- */
+.po-line{ border:1px solid var(--line); border-radius:12px; padding:10px; margin-bottom:8px; background:var(--surface-2) }
+.po-line .po-model{ width:100%; margin-bottom:6px; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:11px 12px; color:var(--text); font-size:16px }
+.po-row2{ display:flex; gap:6px; align-items:center }
+.po-row2 input{ background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:10px 8px; color:var(--text); font-size:16px; min-width:0 }
+.po-row2 .po-qty{ width:62px; flex:0 0 auto } .po-row2 .po-rate{ width:92px; flex:0 0 auto }
+.po-amt{ flex:1; text-align:right; font-weight:800; font-size:13px; white-space:nowrap }
+.po-del{ flex:0 0 auto }
+.po-hint{ font-size:11px; margin:5px 2px 0; min-height:13px; font-weight:600 }
+.po-hint.new{ color:var(--primary-dark) } .dark .po-hint.new{ color:var(--amber) }
+.po-hint.exist{ color:var(--green) }
+.po-total{ display:flex; justify-content:space-between; align-items:center; margin-top:16px; padding:14px 16px;
+  background:var(--surface-2); border:1px solid var(--line); border-radius:14px; font-weight:700 }
+.po-total #poGrand{ font-size:20px; font-weight:800; color:var(--primary-dark) } .dark .po-total #poGrand{ color:var(--amber) }

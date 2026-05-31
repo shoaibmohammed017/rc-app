@@ -15,7 +15,7 @@ function defaultData(){
       lowStockDefault:3,
       address:"", phone:"", gstin:"",
       enableGST:false, gstRate:18, gstInclusive:false,
-      invoiceSeq:1,
+      invoiceSeq:1, purchaseSeq:1,
       expenseCategories:["Rent","Salary","Transport","Marketing","Utilities","Packaging","Repairs","Misc"],
       saleChannels:["Shop / Walk-in","WhatsApp","Instagram","Amazon","Flipkart","Exhibition","Other"],
       productCategories:["RC Car","RC Truck","RC Drone","Battery","Charger","Spare Part","Tyres","Remote","Accessory"]
@@ -391,7 +391,7 @@ function openQuickAdd(){
     buzz();
     const f=b.dataset.add;
     if(f==="sale") saleForm();
-    else if(f==="purchase") purchaseForm();
+    else if(f==="purchase") purchaseOrderForm();
     else if(f==="expense") expenseForm();
     else if(f==="product") productForm();
   });
@@ -748,7 +748,7 @@ function saleForm(id){
    ============================================================ */
 let purFilter={q:"",from:"",to:""};
 function renderPurchases(){
-  addTopAction("➕ New Purchase","btn-primary",()=>purchaseForm());
+  addTopAction("➕ New Purchase","btn-primary",()=>purchaseOrderForm());
   addTopAction("⬇️ Export CSV","",()=>exportCSV("purchases"));
   $("#content").innerHTML = `<div class="panel">
     <div class="filters">
@@ -827,6 +827,139 @@ function purchaseForm(id){
     save();closeModal();toast("Purchase saved","ok");
     if(currentView==="purchases") drawPurchases(); else go(currentView);
   },"Save Purchase", id?"Edit Purchase":"New Purchase");
+}
+
+/* ---------- Multi-model Purchase Order ----------
+   One supplier/date, many model lines. Each line auto-creates the product in
+   inventory if new (or links to the existing one) and adds its quantity to stock.
+   Stored as one purchase record per line (sharing a poNo) so all reports,
+   dues, CSV and sync keep working unchanged. */
+function poLineHTML(){
+  return `<div class="po-line">
+    <input class="po-model" list="poProdList" placeholder="Model / product name" autocomplete="off">
+    <div class="po-row2">
+      <input class="po-qty"  type="number" inputmode="numeric" placeholder="Qty" min="0">
+      <input class="po-rate" type="number" inputmode="decimal" placeholder="₹/unit" min="0">
+      <span class="po-amt">₹0</span>
+      <button type="button" class="icon-btn del po-del" title="Remove line">✕</button>
+    </div>
+    <div class="po-hint"></div>
+  </div>`;
+}
+function purchaseOrderForm(){
+  const prodOpts = DATA.products.map(p=>`<option value="${esc(p.name)}">`).join("");
+  const supOpts  = DATA.suppliers.map(s=>`<option value="${esc(s.name)}">`).join("");
+  const staffSel = DATA.staff.map(x=>`<option>${esc(x.name)}</option>`).join("");
+  openModal("New Purchase Order", `
+    <datalist id="poProdList">${prodOpts}</datalist>
+    <datalist id="poSupList">${supOpts}</datalist>
+    <div class="form-grid">
+      <div class="field"><label>Date *</label><input type="date" id="poDate" value="${today()}"></div>
+      <div class="field"><label>Supplier / bought from</label><input id="poSupplier" list="poSupList" placeholder="Type or pick"></div>
+      <div class="field"><label>Bought by</label><select id="poStaff"><option value="">Who spent</option>${staffSel}</select></div>
+      <div class="field"><label>Invoice / bill no.</label><input id="poInv" placeholder="e.g. INV-000093"></div>
+    </div>
+    <div style="margin:16px 0 8px;font-size:12px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Items / Models</div>
+    <div id="poLines"></div>
+    <button type="button" class="btn btn-sm" id="poAddLine">➕ Add another model</button>
+    <div class="form-grid" style="margin-top:16px">
+      <div class="field"><label>Other charges (shipping / packing / banking)</label><input type="number" id="poExtra" value="0" min="0"></div>
+      <div class="field"><label>Payment status</label><select id="poPay"><option>Paid</option><option>Partial</option><option>Due</option></select></div>
+      <div class="field" id="poPaidWrap" style="display:none"><label>Amount paid</label><input type="number" id="poPaid" value="0" min="0"></div>
+      <div class="field"><label>Notes</label><input id="poNotes" placeholder="Optional"></div>
+    </div>
+    <div class="po-total"><span>Grand total</span><span id="poGrand">₹0</span></div>
+    <div class="form-actions">
+      <button type="button" class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button type="button" class="btn btn-primary" id="poSave">Save purchase</button>
+    </div>
+  `);
+
+  const linesEl = $("#poLines");
+  const addLine = ()=>{ linesEl.insertAdjacentHTML("beforeend", poLineHTML()); wireLine(linesEl.lastElementChild); recompute(); };
+  function wireLine(row){
+    const model=row.querySelector(".po-model"), qty=row.querySelector(".po-qty"),
+          rate=row.querySelector(".po-rate"), hint=row.querySelector(".po-hint");
+    const onModel=()=>{
+      const nm=model.value.trim().toLowerCase();
+      const prod=DATA.products.find(p=>(p.name||"").toLowerCase()===nm);
+      if(!nm){ hint.textContent=""; hint.className="po-hint"; return; }
+      if(prod){
+        hint.textContent=`✓ in inventory · stock ${stockOf(prod)}`; hint.className="po-hint exist";
+        if(!rate.value && prod.cost) rate.value=prod.cost;   // auto-fill last cost
+      } else {
+        hint.textContent="＋ new — will be created in inventory"; hint.className="po-hint new";
+      }
+    };
+    model.addEventListener("input", ()=>{ onModel(); });
+    [qty,rate].forEach(el=>el.addEventListener("input", recompute));
+    row.querySelector(".po-del").onclick=()=>{ row.remove(); if(!linesEl.children.length) addLine(); recompute(); };
+  }
+  function recompute(){
+    let items=0;
+    $$("#poLines .po-line").forEach(row=>{
+      const q=Number(row.querySelector(".po-qty").value)||0;
+      const r=Number(row.querySelector(".po-rate").value)||0;
+      row.querySelector(".po-amt").textContent=money(q*r);
+      items+=q*r;
+    });
+    const extra=Number($("#poExtra").value)||0;
+    $("#poGrand").textContent=money(items+extra);
+  }
+
+  $("#poAddLine").onclick=addLine;
+  $("#poExtra").addEventListener("input", recompute);
+  $("#poPay").addEventListener("change", ()=>{ $("#poPaidWrap").style.display = $("#poPay").value==="Partial"?"":"none"; });
+  addLine();  // start with one row
+
+  $("#poSave").onclick=()=>{
+    const date=$("#poDate").value||today();
+    const supplier=$("#poSupplier").value.trim();
+    const staff=$("#poStaff").value;
+    const inv=$("#poInv").value.trim();
+    const notes=$("#poNotes").value.trim();
+    const extra=Number($("#poExtra").value)||0;
+    const payStatus=$("#poPay").value;
+    const paidInput=Number($("#poPaid").value)||0;
+
+    const lines=[];
+    $$("#poLines .po-line").forEach(row=>{
+      const name=row.querySelector(".po-model").value.trim();
+      const qty=Number(row.querySelector(".po-qty").value)||0;
+      const rate=Number(row.querySelector(".po-rate").value)||0;
+      if(name && qty>0) lines.push({name,qty,rate});
+    });
+    if(!lines.length){ toast("Add at least one model with a quantity","err"); return; }
+
+    const itemsTotal=lines.reduce((s,l)=>s+l.qty*l.rate,0);
+    const grand=itemsTotal+extra;
+    const poPaid = payStatus==="Paid"?grand : payStatus==="Due"?0 : Math.min(Math.max(0,paidInput),grand);
+    const poNo = inv || ("PO-"+String((DATA.settings.purchaseSeq=(Number(DATA.settings.purchaseSeq)||0)+1)).padStart(4,"0"));
+    const ts=nowISO();
+
+    lines.forEach(l=>{
+      let prod=DATA.products.find(p=>(p.name||"").toLowerCase()===l.name.toLowerCase());
+      if(!prod){
+        prod={id:nextId(),name:l.name,category:"",cost:l.rate,price:0,stock:0,reorder:DATA.settings.lowStockDefault,supplier:supplier||"",updatedAt:ts};
+        DATA.products.push(prod);
+      }
+      const lineAmt=l.qty*l.rate;
+      const shipShare = itemsTotal>0 ? Math.round(extra*(lineAmt/itemsTotal)*100)/100 : 0;
+      const lineTotal = lineAmt+shipShare;
+      const paid = payStatus==="Paid"?lineTotal : payStatus==="Due"?0
+                 : (grand>0 ? Math.round(poPaid*(lineTotal/grand)*100)/100 : 0);
+      DATA.purchases.push({
+        id:nextId(), date, productId:prod.id, qty:l.qty, price:l.rate,
+        shipping:shipShare, supplier, staff, payStatus, paid, poNo, notes, updatedAt:ts
+      });
+      adjustStock(prod.id, +l.qty);
+      maybeUpdateProductCost(prod.id, date, l.rate);
+    });
+    maybeAddSupplier(supplier);
+    save(); closeModal();
+    toast(`${lines.length} model(s) added to purchases & inventory`,"ok");
+    if(currentView==="purchases") drawPurchases(); else go(currentView);
+  };
 }
 
 /* ============================================================
