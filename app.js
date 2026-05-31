@@ -1506,7 +1506,7 @@ function applyTheme(t){
   const dark = t==="dark" || (t==="system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
   document.documentElement.classList.toggle("dark", dark);
   const meta=document.querySelector('meta[name="theme-color"]');
-  if(meta) meta.setAttribute("content", dark? "#0f172a" : "#f59e0b");
+  if(meta) meta.setAttribute("content", dark? "#000000" : "#000000");
 }
 function setTheme(t){ localStorage.setItem(THEME_KEY,t); applyTheme(t); }
 
