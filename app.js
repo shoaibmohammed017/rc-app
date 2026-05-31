@@ -997,7 +997,7 @@ window.openInvoice=(saleId)=>{
   </style></head><body>
     <div class="head">
       <div class="biz">
-        <h1>${esc(st.businessName||"RC Manager")}</h1>
+        <h1>${esc(st.businessName||"PRC Sales App")}</h1>
         ${st.address?`<div>${esc(st.address)}</div>`:""}
         ${st.phone?`<div>📞 ${esc(st.phone)}</div>`:""}
         ${st.gstin?`<div>GSTIN: ${esc(st.gstin)}</div>`:""}
@@ -1252,7 +1252,7 @@ function renderSettings(){
   $$("#themeSeg button").forEach(b=>b.onclick=()=>{ buzz(); setTheme(b.dataset.t); paintSeg(); });
 
   $("#saveProfile").onclick=()=>{
-    s.businessName=$("#setName").value||"RC Manager";
+    s.businessName=$("#setName").value||"PRC Sales App";
     s.currency=$("#setCur").value||"₹";
     s.phone=$("#setPhone").value;
     s.address=$("#setAddr").value;
@@ -1529,7 +1529,7 @@ function showLogin(){
   $("#loginScreen").classList.add("open");
   $("#loginErr").textContent="";
   $("#loginForm").reset();
-  $("#loginTitle").textContent=DATA.settings.businessName||"RC Manager";
+  $("#loginTitle").textContent=DATA.settings.businessName||"PRC Sales App";
   const lbl = $("#loginUser").previousElementSibling;
   if(CLOUD){
     if(lbl) lbl.textContent="Email";
