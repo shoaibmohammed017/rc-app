@@ -28,13 +28,16 @@ function defaultData(){
 }
 
 /* ---------- Cloud (Supabase) setup ---------- */
-/* NO-LOGIN MODE: cloud + login are turned off. The app opens straight to the
-   dashboard and saves data locally on this device. To re-enable cloud login
-   later, set NO_LOGIN = false. */
+/* NO_LOGIN: open straight to the dashboard, no sign-in screen.
+   SYNC:     mirror data to the cloud and merge across devices (shared anon key,
+             no per-user login) + daily auto-backup.
+   The two are independent — here we run no-login AND synced.
+   Set SYNC=false to go back to local-only on this device. */
 const NO_LOGIN = true;
+const SYNC = true;
 const CFG = window.RC_CONFIG || {};
 const BIZ_ID = CFG.BUSINESS_ID || "main";
-const CLOUD = !NO_LOGIN && !!(window.supabase && CFG.SUPABASE_URL && CFG.SUPABASE_KEY);
+const CLOUD = SYNC && !!(window.supabase && CFG.SUPABASE_URL && CFG.SUPABASE_KEY);
 let sb = null;
 if (CLOUD) { try { sb = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_KEY); } catch(e){ console.warn("Supabase init failed", e); } }
 
