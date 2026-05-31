@@ -39,42 +39,126 @@ let sb = null;
 if (CLOUD) { try { sb = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_KEY); } catch(e){ console.warn("Supabase init failed", e); } }
 
 /* ---------- Storage ---------- */
+const COLLECTIONS = ["products","sales","purchases","expenses","customers","suppliers","staff","users"];
+function normalize(d){
+  // deep-merge over defaults so older/partial data never has missing arrays/sub-keys
+  const def = defaultData();
+  const out = Object.assign({}, def, d||{});
+  out.settings = Object.assign({}, def.settings, (d&&d.settings)||{});
+  COLLECTIONS.forEach(k=>{ if(!Array.isArray(out[k])) out[k]=[]; });
+  out.tombstones = (d&&d.tombstones && typeof d.tombstones==="object") ? d.tombstones : {};
+  // backfill cost-at-sale for inventory-linked sales so profit freezes going forward
+  out.sales.forEach(s=>{
+    if((s.costAtSale==null||s.costAtSale==="") && s.productId){
+      const p=out.products.find(x=>x.id===s.productId);
+      if(p) s.costAtSale = Number(p.cost)||0;
+    }
+  });
+  return out;
+}
 let DATA = load();
 function load(){
   try{
     const raw = localStorage.getItem(STORE_KEY);
     if(!raw) return defaultData();
-    const d = JSON.parse(raw);
-    return Object.assign(defaultData(), d);
+    return normalize(JSON.parse(raw));
   }catch(e){ return defaultData(); }
 }
-let cloudTimer = null;
+let cloudTimer = null, dirty = false, applyingRemote = false;
 function save(){
-  localStorage.setItem(STORE_KEY, JSON.stringify(DATA));
-  if(CLOUD && sb){ clearTimeout(cloudTimer); cloudTimer = setTimeout(pushCloud, 700); }
+  try{
+    localStorage.setItem(STORE_KEY, JSON.stringify(DATA));
+  }catch(e){
+    toast("Couldn't save on this device (storage full or private mode). Use Backup.","err");
+  }
+  if(CLOUD && sb && !applyingRemote){
+    dirty = true;
+    clearTimeout(cloudTimer);
+    cloudTimer = setTimeout(syncCloud, 700);
+  }
 }
+
+/* ---- Per-record merge (so two phones don't overwrite each other) ---- */
+function mergeData(local, remote){
+  const a = normalize(local), b = normalize(remote);
+  const tombs = {};
+  [a.tombstones, b.tombstones].forEach(t=>{
+    Object.keys(t||{}).forEach(id=>{ if(!tombs[id] || t[id] > tombs[id]) tombs[id] = t[id]; });
+  });
+  const out = Object.assign({}, a);
+  COLLECTIONS.forEach(k=>{
+    const byId = {};
+    (b[k]||[]).forEach(r=>{ if(r&&r.id) byId[r.id]=r; });
+    (a[k]||[]).forEach(r=>{
+      if(!r||!r.id) return;
+      const ex = byId[r.id];
+      if(!ex || (r.updatedAt||"") >= (ex.updatedAt||"")) byId[r.id]=r;
+    });
+    out[k] = Object.values(byId).filter(r=>{
+      const t = tombs[r.id];
+      return !(t && t >= (r.updatedAt||""));   // drop if deleted more recently than last edit
+    });
+  });
+  // settings: whichever was updated last wins as a whole
+  out.settings = ((b.settings&&b.settings.updatedAt||"") > (a.settings&&a.settings.updatedAt||"")) ? b.settings : a.settings;
+  out.tombstones = tombs;
+  out.seq = Math.max(Number(a.seq)||1, Number(b.seq)||1);
+  return out;
+}
+
 async function pushCloud(){
   if(!CLOUD || !sb) return;
   try{
     const { error } = await sb.from("business_state")
-      .upsert({ id: BIZ_ID, data: DATA, updated_at: new Date().toISOString() });
-    if(error) console.warn("Cloud save:", error.message);
-  }catch(e){ console.warn("Cloud save failed", e); }
+      .upsert({ id: BIZ_ID, data: DATA, updated_at: nowISO() });
+    if(error){ console.warn("Cloud save:", error.message); return false; }
+    dirty = false; return true;
+  }catch(e){ console.warn("Cloud save failed", e); return false; }
 }
-async function fetchCloud(){
+// fetch remote, merge with local, then push the merged result back
+async function syncCloud(){
   if(!CLOUD || !sb) return;
   try{
     const { data, error } = await sb.from("business_state").select("data").eq("id", BIZ_ID).maybeSingle();
     if(error){ console.warn("Cloud load:", error.message); return; }
+    const remote = (data && data.data && Object.keys(data.data).length) ? data.data : null;
+    if(remote){ DATA = mergeData(DATA, remote); }
+    try{ localStorage.setItem(STORE_KEY, JSON.stringify(DATA)); }catch(e){}
+    await pushCloud();
+  }catch(e){ console.warn("Cloud sync failed", e); }
+}
+// pull remote and merge into memory (used on startup/focus); returns true if changed
+async function fetchCloud(){
+  if(!CLOUD || !sb) return false;
+  try{
+    const { data, error } = await sb.from("business_state").select("data").eq("id", BIZ_ID).maybeSingle();
+    if(error){ console.warn("Cloud load:", error.message); return false; }
+    const before = JSON.stringify(DATA);
     if(data && data.data && Object.keys(data.data).length){
-      DATA = Object.assign(defaultData(), data.data);
-      localStorage.setItem(STORE_KEY, JSON.stringify(DATA));
+      DATA = mergeData(DATA, data.data);
     } else {
-      // first run on a fresh cloud DB — seed from local cache / defaults
-      DATA = load();
-      await pushCloud();
+      await pushCloud(); // first run on empty cloud — seed it
+      return false;
     }
-  }catch(e){ console.warn("Cloud load failed", e); }
+    applyingRemote = true;
+    try{ localStorage.setItem(STORE_KEY, JSON.stringify(DATA)); }catch(e){}
+    applyingRemote = false;
+    if(dirty) await pushCloud();  // don't lose a queued local edit
+    return JSON.stringify(DATA) !== before;
+  }catch(e){ console.warn("Cloud load failed", e); return false; }
+}
+// Auto-backup: once per calendar day, save a dated snapshot to the cloud so you
+// have point-in-time restore even if today's live data gets messed up.
+async function autoBackup(){
+  if(!CLOUD || !sb) return;
+  const day = today();
+  if(localStorage.getItem("rcbiz_lastsnap") === day) return; // already done today
+  try{
+    const { error } = await sb.from("business_snapshots")
+      .upsert({ snapshot_date: day, data: DATA, created_at: nowISO() }, { onConflict: "snapshot_date" });
+    if(!error) localStorage.setItem("rcbiz_lastsnap", day);
+    else console.warn("Auto-backup:", error.message);
+  }catch(e){ console.warn("Auto-backup failed", e); }
 }
 function nextId(){ return "id" + (DATA.seq++) + "_" + Date.now().toString(36); }
 
@@ -141,7 +225,9 @@ function money(n){
   return cur() + n.toLocaleString("en-IN",{maximumFractionDigits:2});
 }
 function num(n){ return (Number(n)||0).toLocaleString("en-IN"); }
-function today(){ return new Date().toISOString().slice(0,10); }
+// today in LOCAL time (so a late-night entry doesn't default to the UTC day)
+function today(){ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
+function nowISO(){ return new Date().toISOString(); }
 function fmtDate(d){
   if(!d) return "—";
   const dt = new Date(d+"T00:00:00");
@@ -149,7 +235,7 @@ function fmtDate(d){
   return dt.toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"numeric"});
 }
 function monthKey(d){ return (d||"").slice(0,7); }
-function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function esc(s){ return String(s==null?"":s).replace(/[&<>"'/]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;","/":"&#47;"}[c])); }
 function uid(prefix){ return prefix+Math.random().toString(36).slice(2,8); }
 
 function toast(msg,type=""){
@@ -163,7 +249,7 @@ function toast(msg,type=""){
 /* ---------- Derived calculations ---------- */
 function productById(id){ return DATA.products.find(p=>p.id===id); }
 function stockOf(p){ return Number(p.stock)||0; }
-function stockValue(){ return DATA.products.reduce((s,p)=>s+stockOf(p)*(Number(p.cost)||0),0); }
+function stockValue(){ return DATA.products.reduce((s,p)=>s+Math.max(0,stockOf(p))*(Number(p.cost)||0),0); }
 function lowStockProducts(){
   return DATA.products.filter(p=>stockOf(p) <= (Number(p.reorder)|| DATA.settings.lowStockDefault));
 }
@@ -171,11 +257,18 @@ function sumBy(arr,f){ return arr.reduce((s,x)=>s+(Number(f(x))||0),0); }
 
 function saleTotal(s){ return (Number(s.qty)||0)*(Number(s.price)||0) - (Number(s.discount)||0); }
 function saleCost(s){
+  // Prefer the cost captured AT THE TIME OF SALE so a later restock at a
+  // different price never rewrites historical profit. Fall back to the
+  // product's current cost only for legacy sales that have no snapshot.
+  const hasSnap = s.costAtSale!=null && s.costAtSale!=="";
   const p = productById(s.productId);
-  const c = p? Number(p.cost)||0 : Number(s.costAtSale)||0;
+  const c = hasSnap ? (Number(s.costAtSale)||0) : (p ? Number(p.cost)||0 : 0);
   return (Number(s.qty)||0)*c;
 }
-function saleProfit(s){ return saleTotal(s) - saleCost(s); }
+function saleProfit(s){ return saleTaxable(s) - saleCost(s); }
+/* amount still owed on a sale, computed from amounts (not the status label) */
+function saleDue(s){ return Math.max(0, saleGrand(s) - (Number(s.paid)||0)); }
+function purchaseDue(p){ return Math.max(0, purchaseTotal(p) - (Number(p.paid)||0)); }
 function purchaseTotal(p){ return (Number(p.qty)||0)*(Number(p.price)||0) + (Number(p.shipping)||0); }
 
 /* GST helpers (used for invoices). saleTotal stays the recorded sale value. */
@@ -363,10 +456,10 @@ function optionsFor(key){
   return DATA.settings[key] || [];
 }
 function addOptionValue(key, val){
-  if(key==="suppliers"){ if(!DATA.suppliers.some(s=>s.name===val)) DATA.suppliers.push({id:nextId(),name:val}); }
-  else if(key==="staff"){ if(!DATA.staff.some(s=>s.name===val)) DATA.staff.push({id:nextId(),name:val}); }
-  else if(key==="customers"){ if(!DATA.customers.some(c=>c.name===val)) DATA.customers.push({id:nextId(),name:val}); }
-  else { if(!DATA.settings[key]) DATA.settings[key]=[]; if(!DATA.settings[key].includes(val)) DATA.settings[key].push(val); }
+  if(key==="suppliers"){ if(!DATA.suppliers.some(s=>s.name===val)) DATA.suppliers.push({id:nextId(),name:val,updatedAt:nowISO()}); }
+  else if(key==="staff"){ if(!DATA.staff.some(s=>s.name===val)) DATA.staff.push({id:nextId(),name:val,updatedAt:nowISO()}); }
+  else if(key==="customers"){ if(!DATA.customers.some(c=>c.name===val)) DATA.customers.push({id:nextId(),name:val,updatedAt:nowISO()}); }
+  else { if(!DATA.settings[key]) DATA.settings[key]=[]; if(!DATA.settings[key].includes(val)) DATA.settings[key].push(val); DATA.settings.updatedAt=nowISO(); }
   save();
 }
 function rebuildSelect(sel, key, selectVal){
@@ -413,8 +506,10 @@ function renderDashboard(){
   const netProfit = grossProfit - totalExpenses;
   const totalPurchases = sumBy(purchases, purchaseTotal);
 
-  const salesDue = sumBy(sales.filter(s=>s.payStatus!=="Paid"), s=> saleTotal(s)-(Number(s.paid)||0));
-  const purchDue = sumBy(purchases.filter(p=>p.payStatus!=="Paid"), p=> purchaseTotal(p)-(Number(p.paid)||0));
+  // Outstanding computed from amounts, not the status label, so stale paid
+  // values after a status toggle can't distort collectibles/payables.
+  const salesDue = sumBy(sales, saleDue);
+  const purchDue = sumBy(purchases, purchaseDue);
 
   const low = lowStockProducts();
 
@@ -602,6 +697,7 @@ function saleForm(id){
     {name:"itemName",label:"Or item name (if not in inventory)",value:s.itemName,placeholder:"e.g. Custom RC build"},
     {name:"qty",label:"Quantity",type:"number",step:"1",value:s.qty,required:true},
     {name:"price",label:"Selling price (per unit)",type:"number",value:s.price,required:true},
+    {name:"cost",label:"Cost price/unit (for profit)",type:"number",value:s.costAtSale,placeholder:"Auto-filled if product picked"},
     {name:"discount",label:"Discount (total)",type:"number",value:s.discount},
     ...(DATA.settings.enableGST?[{name:"gstRate",label:`GST % ${DATA.settings.gstInclusive?"(price incl.)":"(added on top)"}`,type:"number",value:s.gstRate!=null?s.gstRate:DATA.settings.gstRate}]:[]),
     {name:"channel",label:"Sold where (channel)",type:"select",value:s.channel,options:DATA.settings.saleChannels,placeholder:"Select",addable:"saleChannels"},
@@ -613,20 +709,30 @@ function saleForm(id){
   ], (o)=>{
     if(!o.productId && !o.itemName){ toast("Pick a product or type an item name","err"); return; }
     o.qty=Number(o.qty); o.price=Number(o.price); o.discount=Number(o.discount)||0; o.paid=Number(o.paid)||0;
+    if(!(o.qty>0)){ toast("Enter a quantity greater than 0","err"); return; }
+    if(!(o.price>=0)){ toast("Enter a valid selling price","err"); return; }
     if(o.gstRate!=null && o.gstRate!=="") o.gstRate=Number(o.gstRate);
+    // freeze cost-at-sale: product cost if picked, else the typed cost (for one-off items)
     const prod = productById(o.productId);
-    if(prod) o.costAtSale = Number(prod.cost)||0;
-    if(o.payStatus==="Paid") o.paid = saleTotal(o);
+    o.costAtSale = prod ? (Number(prod.cost)||0) : (Number(o.cost)||0);
+    delete o.cost;
+    // reconcile paid against the GST-inclusive grand total based on status
+    const grand = saleGrand(o);
+    if(o.payStatus==="Paid") o.paid = grand;
+    else if(o.payStatus==="Due") o.paid = 0;
+    else o.paid = Math.min(Math.max(0,o.paid), grand); // Partial: clamp 0..grand
+    o.updatedAt = nowISO();
     if(id){
-      // revert old stock then apply new
+      // revert OLD stock (captured before mutation) then apply NEW
       const old = DATA.sales.find(x=>x.id===id);
-      adjustStock(old.productId, +Number(old.qty)||0);
+      const prevPid = old.productId, prevQty = Number(old.qty)||0;
+      adjustStock(prevPid, +prevQty);
       Object.assign(old,o);
-      adjustStock(o.productId, -o.qty);
+      adjustStock(o.productId, -(Number(o.qty)||0));
     }else{
       o.id=nextId();
       DATA.sales.push(o);
-      adjustStock(o.productId, -o.qty);
+      adjustStock(o.productId, -(Number(o.qty)||0));
       maybeAddCustomer(o.customer);
     }
     save(); closeModal(); toast("Sale saved","ok");
@@ -689,22 +795,30 @@ function purchaseForm(id){
   ],(o)=>{
     if(!o.productId && !o.itemName){ toast("Pick a product or type an item name","err"); return; }
     o.qty=Number(o.qty);o.price=Number(o.price);o.shipping=Number(o.shipping)||0;o.paid=Number(o.paid)||0;
-    if(o.payStatus==="Paid") o.paid=purchaseTotal(o);
+    if(!(o.qty>0)){ toast("Enter a quantity greater than 0","err"); return; }
+    if(!(o.price>=0)){ toast("Enter a valid cost price","err"); return; }
+    // reconcile paid against total based on status
+    const ptot = purchaseTotal(o);
+    if(o.payStatus==="Paid") o.paid=ptot;
+    else if(o.payStatus==="Due") o.paid=0;
+    else o.paid=Math.min(Math.max(0,o.paid), ptot);
+    o.updatedAt = nowISO();
     // create product if typed new name
     if(!o.productId && o.itemName){
-      const np={id:nextId(),name:o.itemName,category:"",cost:o.price,price:0,stock:0,reorder:DATA.settings.lowStockDefault,supplier:o.supplier||""};
+      const np={id:nextId(),name:o.itemName,category:"",cost:o.price,price:0,stock:0,reorder:DATA.settings.lowStockDefault,supplier:o.supplier||"",updatedAt:nowISO()};
       DATA.products.push(np); o.productId=np.id;
     }
     if(id){
       const old=DATA.purchases.find(x=>x.id===id);
-      adjustStock(old.productId, -(Number(old.qty)||0));
+      const prevPid=old.productId, prevQty=Number(old.qty)||0;
+      adjustStock(prevPid, -prevQty);
       Object.assign(old,o);
-      adjustStock(o.productId, +o.qty);
-      const pr=productById(o.productId); if(pr) pr.cost=o.price;
+      adjustStock(o.productId, +(Number(o.qty)||0));
+      maybeUpdateProductCost(o.productId, o.date, o.price);
     }else{
       o.id=nextId(); DATA.purchases.push(o);
-      adjustStock(o.productId, +o.qty);
-      const pr=productById(o.productId); if(pr) pr.cost=o.price;
+      adjustStock(o.productId, +(Number(o.qty)||0));
+      maybeUpdateProductCost(o.productId, o.date, o.price);
       maybeAddSupplier(o.supplier);
     }
     save();closeModal();toast("Purchase saved","ok");
@@ -758,6 +872,8 @@ function expenseForm(id){
     {name:"notes",label:"Notes",type:"textarea",value:e.notes,full:true}
   ],(o)=>{
     o.amount=Number(o.amount);
+    if(!(o.amount>0)){ toast("Enter an amount greater than 0","err"); return; }
+    o.updatedAt=nowISO();
     if(id) Object.assign(DATA.expenses.find(x=>x.id===id),o);
     else { o.id=nextId(); DATA.expenses.push(o); }
     save();closeModal();toast("Expense saved","ok");
@@ -815,7 +931,9 @@ function productForm(id){
     {name:"reorder",label:"Low-stock alert at",type:"number",step:"1",value:p.reorder},
     {name:"supplier",label:"Default supplier",type:"select",value:p.supplier,options:DATA.suppliers.map(s=>s.name),placeholder:"Select",addable:"suppliers"}
   ],(o)=>{
+    if(!o.name||!o.name.trim()){ toast("Enter a product name","err"); return; }
     o.cost=Number(o.cost)||0;o.price=Number(o.price)||0;o.stock=Number(o.stock)||0;o.reorder=Number(o.reorder)||0;
+    o.updatedAt=nowISO();
     if(id) Object.assign(productById(id),o);
     else { o.id=nextId(); DATA.products.push(o); }
     save();closeModal();toast("Product saved","ok");drawInventory&&(currentView==="inventory"?drawInventory():go(currentView));
@@ -823,7 +941,16 @@ function productForm(id){
 }
 function adjustStock(productId, delta){
   const p=productById(productId);
-  if(p){ p.stock=(Number(p.stock)||0)+delta; }
+  if(p){ p.stock=(Number(p.stock)||0)+delta; p.updatedAt=nowISO(); }
+}
+// Only let the MOST RECENT purchase set the product's current cost, so
+// correcting an old purchase doesn't clobber today's inventory cost.
+function maybeUpdateProductCost(productId, date, price){
+  const pr=productById(productId); if(!pr) return;
+  const latest=DATA.purchases
+    .filter(x=>x.productId===productId)
+    .reduce((acc,x)=> (!acc || (x.date||"")>=(acc.date||"")) ? x : acc, null);
+  if(!latest || (date||"")>=(latest.date||"")){ pr.cost=Number(price)||0; pr.updatedAt=nowISO(); }
 }
 
 /* ---------- Invoice / bill ---------- */
@@ -837,7 +964,7 @@ window.openInvoice=(saleId)=>{
   const half=gst/2, rate=gstRateOf(s);
   const C=v=>esc(money(v));
   const rows=`
-    <tr><td>${esc(item)}</td><td class="r">${num(s.qty)}</td><td class="r">${C(saleTotal(s)/(Number(s.qty)||1))}</td>
+    <tr><td>${esc(item)}</td><td class="r">${num(s.qty)}</td><td class="r">${C(Number(s.price)||0)}</td>
         ${s.discount?`<td class="r">-${C(s.discount)}</td>`:`<td class="r">—</td>`}<td class="r">${C(taxable)}</td></tr>`;
   const gstBlock=gstOn?`
     <tr><td colspan="4" class="r">Taxable value</td><td class="r">${C(taxable)}</td></tr>
@@ -916,7 +1043,7 @@ function renderContacts(kind, listKey, extraFields){
       {label:"Phone",render:x=>esc(x.phone||"—")},
       {label:"Total bought",num:true,render:x=>money(sumBy(DATA.sales.filter(s=>s.customer===x.name),saleTotal))},
       {label:"Orders",num:true,render:x=>num(DATA.sales.filter(s=>s.customer===x.name).length)},
-      {label:"Due",num:true,render:x=>money(sumBy(DATA.sales.filter(s=>s.customer===x.name&&s.payStatus!=="Paid"),s=>saleTotal(s)-(Number(s.paid)||0)))},
+      {label:"Due",num:true,render:x=>money(sumBy(DATA.sales.filter(s=>s.customer===x.name),saleDue))},
       {label:"Notes",render:x=>esc(x.notes||"—")},
       {label:"",render:x=>rowActions(kind,x.id)}
     ];
@@ -926,7 +1053,7 @@ function renderContacts(kind, listKey, extraFields){
       {label:"Phone",render:x=>esc(x.phone||"—")},
       {label:"Total purchased",num:true,render:x=>money(sumBy(DATA.purchases.filter(p=>p.supplier===x.name),purchaseTotal))},
       {label:"Orders",num:true,render:x=>num(DATA.purchases.filter(p=>p.supplier===x.name).length)},
-      {label:"Owed",num:true,render:x=>money(sumBy(DATA.purchases.filter(p=>p.supplier===x.name&&p.payStatus!=="Paid"),p=>purchaseTotal(p)-(Number(p.paid)||0)))},
+      {label:"Owed",num:true,render:x=>money(sumBy(DATA.purchases.filter(p=>p.supplier===x.name),purchaseDue))},
       {label:"Notes",render:x=>esc(x.notes||"—")},
       {label:"",render:x=>rowActions(kind,x.id)}
     ];
@@ -959,16 +1086,18 @@ function contactForm(kind, listKey, _x, id){
   else fields.push({name:"email",label:"Email / Address",value:x.email});
   fields.push({name:"notes",label:"Notes",type:"textarea",value:x.notes,full:true});
   buildForm(fields,(o)=>{
+    if(!o.name||!o.name.trim()){ toast("Enter a name","err"); return; }
+    o.updatedAt=nowISO();
     if(id) Object.assign(list.find(i=>i.id===id),o);
     else { o.id=nextId(); list.push(o); }
     save();closeModal();toast(labels[kind]+" saved","ok");go(currentView);
   },"Save", id?("Edit "+labels[kind]):("Add "+labels[kind]));
 }
 function maybeAddCustomer(name){
-  if(name && !DATA.customers.some(c=>c.name===name)) DATA.customers.push({id:nextId(),name});
+  if(name && !DATA.customers.some(c=>c.name===name)) DATA.customers.push({id:nextId(),name,updatedAt:nowISO()});
 }
 function maybeAddSupplier(name){
-  if(name && !DATA.suppliers.some(s=>s.name===name)) DATA.suppliers.push({id:nextId(),name});
+  if(name && !DATA.suppliers.some(s=>s.name===name)) DATA.suppliers.push({id:nextId(),name,updatedAt:nowISO()});
 }
 
 /* ============================================================
@@ -1129,6 +1258,7 @@ function renderSettings(){
     s.gstin=$("#setGstin").value;
     s.gstRate=Number($("#setGstRate").value)||0;
     s.gstInclusive=$("#setGstIncl").value==="yes";
+    s.updatedAt=nowISO();
     save();applyBranding();toast("Profile saved","ok");
   };
 
@@ -1146,16 +1276,16 @@ function renderSettings(){
   $("#btnRestore").onclick=()=>$("#restoreFile").click();
   $("#restoreFile").onchange=restore;
   $("#btnSeed").onclick=()=>{ if(confirm("Load sample data? This adds demo records on top of what you have.")) seed(); };
-  $("#btnReset").onclick=()=>{ if(confirm("This erases ALL your data permanently. Make a backup first. Continue?")){ DATA=defaultData();save();applyBranding();toast("All data erased");logout(); } };
+  $("#btnReset").onclick=()=>{ if(confirm("This erases ALL your data permanently. Make a backup first. Continue?")){ DATA=defaultData();DATA.settings.updatedAt=nowISO();save();applyBranding();toast("All data erased");logout(); } };
 }
 function renderChips(elId, key){
   const el=$("#"+elId);
   el.innerHTML=DATA.settings[key].map((x,i)=>`<span class="badge ok" style="margin:3px;padding:6px 10px;font-size:12px">${esc(x)} <a href="#" data-i="${i}" style="color:#fca5a5;text-decoration:none;margin-left:4px">✕</a></span>`).join("")||`<span style="color:var(--muted);font-size:13px">None yet</span>`;
-  $$("a[data-i]",el).forEach(a=>a.onclick=(e)=>{e.preventDefault();DATA.settings[key].splice(Number(a.dataset.i),1);save();renderChips(elId,key);});
+  $$("a[data-i]",el).forEach(a=>a.onclick=(e)=>{e.preventDefault();DATA.settings[key].splice(Number(a.dataset.i),1);DATA.settings.updatedAt=nowISO();save();renderChips(elId,key);});
 }
 function addChip(key, inputId, elId){
   const v=$("#"+inputId).value.trim();
-  if(v && !DATA.settings[key].includes(v)){ DATA.settings[key].push(v); save(); $("#"+inputId).value=""; renderChips(elId,key); }
+  if(v && !DATA.settings[key].includes(v)){ DATA.settings[key].push(v); DATA.settings.updatedAt=nowISO(); save(); $("#"+inputId).value=""; renderChips(elId,key); }
 }
 
 /* ---------- Users ---------- */
@@ -1227,15 +1357,30 @@ window.editRow=(type,id)=>{
   else if(type==="suppliers") contactForm("suppliers","suppliers",null,id);
   else if(type==="staff") contactForm("staff","staff",null,id);
 };
+function tomb(id){ if(!DATA.tombstones) DATA.tombstones={}; DATA.tombstones[id]=nowISO(); }
 window.deleteRow=(type,id)=>{
+  if(type==="product"){
+    // don't orphan history: snapshot the name onto referencing rows, block if in use is too strict,
+    // so we keep records readable by copying the product name into itemName.
+    const p=DATA.products.find(x=>x.id===id);
+    const used=DATA.sales.filter(s=>s.productId===id).length + DATA.purchases.filter(pp=>pp.productId===id).length;
+    if(used && !confirm(`This product is used in ${used} record(s). Delete it? Those records will keep the name but lose the inventory link.`)) return;
+    if(!used && !confirm("Delete this product?")) return;
+    if(p){
+      DATA.sales.forEach(s=>{ if(s.productId===id && !s.itemName){ s.itemName=p.name; s.updatedAt=nowISO(); } });
+      DATA.purchases.forEach(pp=>{ if(pp.productId===id && !pp.itemName){ pp.itemName=p.name; pp.updatedAt=nowISO(); } });
+    }
+    DATA.products=DATA.products.filter(x=>x.id!==id); tomb(id);
+    save();toast("Deleted");go(currentView); return;
+  }
   if(!confirm("Delete this entry? This cannot be undone.")) return;
   if(type==="sale"){ const s=DATA.sales.find(x=>x.id===id); if(s) adjustStock(s.productId,+Number(s.qty)||0); DATA.sales=DATA.sales.filter(x=>x.id!==id); }
   else if(type==="purchase"){ const p=DATA.purchases.find(x=>x.id===id); if(p) adjustStock(p.productId,-(Number(p.qty)||0)); DATA.purchases=DATA.purchases.filter(x=>x.id!==id); }
   else if(type==="expense"){ DATA.expenses=DATA.expenses.filter(x=>x.id!==id); }
-  else if(type==="product"){ DATA.products=DATA.products.filter(x=>x.id!==id); }
   else if(type==="customers"){ DATA.customers=DATA.customers.filter(x=>x.id!==id); }
   else if(type==="suppliers"){ DATA.suppliers=DATA.suppliers.filter(x=>x.id!==id); }
   else if(type==="staff"){ DATA.staff=DATA.staff.filter(x=>x.id!==id); }
+  tomb(id);
   save();toast("Deleted");go(currentView);
 };
 
@@ -1259,12 +1404,20 @@ function restore(e){
   reader.onload=()=>{
     try{
       const d=JSON.parse(reader.result);
-      if(!d.products||!d.sales){ throw new Error("bad"); }
-      DATA=Object.assign(defaultData(),d);
+      // thorough validation: every expected collection must be an array
+      if(!d || typeof d.settings!=="object" || d.settings===null) throw new Error("not a valid backup");
+      for(const k of COLLECTIONS){ if(d[k]!==undefined && !Array.isArray(d[k])) throw new Error("corrupt "+k); }
+      if(!Array.isArray(d.sales) || !Array.isArray(d.products)) throw new Error("missing sales/products");
+      if(!confirm("Importing will REPLACE all current data on this device with the backup. This cannot be undone. Continue?")){ e.target.value=""; return; }
+      // keep a one-step undo of what we're about to overwrite
+      try{ localStorage.setItem(STORE_KEY+"_prerestore", localStorage.getItem(STORE_KEY)||""); }catch(_){ }
+      DATA=normalize(d);            // deep-merge over defaults: missing settings keys survive
+      DATA.settings.updatedAt=nowISO();
       save();applyBranding();
-      if(CLOUD){ toast("Backup restored to cloud","ok"); go("dashboard"); }
-      else { toast("Backup restored — please sign in","ok"); logout(); }
-    }catch(err){ toast("Invalid backup file","err"); }
+      toast("Backup restored","ok");
+      go("dashboard");
+    }catch(err){ toast("Couldn't import: "+(err&&err.message||"invalid backup file"),"err"); }
+    finally{ e.target.value=""; }   // allow re-selecting the same file
   };
   reader.readAsText(file);
 }
@@ -1432,17 +1585,41 @@ async function init(){
   }
 
   applyBranding();
-  // NO-LOGIN MODE: skip the login screen and open straight to the dashboard.
+
+  // NO-LOGIN mode: open straight to the dashboard. With SYNC on, pull the latest
+  // cloud data first, take a daily auto-backup, and listen for live updates.
   if(NO_LOGIN){
     currentUser = (DATA.users && DATA.users[0]) || { id:"local", name:"Owner", role:"admin" };
-    currentUser.role = "admin"; // full access to everything, including Settings
+    currentUser.role = "admin";
     $("#loginScreen").classList.remove("open");
+    if(CLOUD){
+      await fetchCloud();
+      autoBackup();
+      setupRealtime();
+    }
     startApp();
     return;
   }
+
   let restored=false;
   if(CLOUD) restored = await cloudRestore();
   else restored = restoreSession();
-  if(restored) startApp(); else showLogin();
+  if(restored){ startApp(); if(CLOUD){ autoBackup(); setupRealtime(); } } else showLogin();
+}
+
+// Live cross-device updates: when another phone writes, pull + re-render.
+let realtimeOn=false;
+function setupRealtime(){
+  if(!CLOUD || !sb || realtimeOn) return;
+  try{
+    sb.channel("biz")
+      .on("postgres_changes", { event:"*", schema:"public", table:"business_state" }, async ()=>{
+        if($("#modalOverlay").classList.contains("open")) return; // don't disrupt an open form
+        const changed = await fetchCloud();
+        if(changed && currentView) go(currentView);
+      })
+      .subscribe();
+    realtimeOn=true;
+  }catch(e){ console.warn("Realtime setup failed", e); }
 }
 init();
