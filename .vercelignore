@@ -1,0 +1,5 @@
+# Dev / setup files — not needed on the live site
+make-icons.js
+site-deploy.zip
+*.md
+supabase-schema.sql

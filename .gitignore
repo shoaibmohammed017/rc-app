@@ -1,0 +1,16 @@
+# Vercel
+.vercel
+
+# Build/deploy artifacts
+site-deploy.zip
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Logs
+*.log

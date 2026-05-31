@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>RC Car Business Manager</title>
+<link rel="stylesheet" href="styles.css" />
+<!-- PWA -->
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#f59e0b" />
+<link rel="icon" type="image/png" href="icon-192.png" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="RC Manager" />
+<!-- Apply saved theme before paint (no flash) -->
+<script>
+  (function(){
+    try{
+      var t = localStorage.getItem("rcbiz_theme") || "system";
+      var dark = t === "dark" || (t === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+      if(dark) document.documentElement.classList.add("dark");
+    }catch(e){}
+  })();
+</script>
+</head>
+<body>
+<div id="app">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-logo">🏎️</div>
+      <div class="brand-text">
+        <span class="brand-name" id="brandName">RC Manager</span>
+        <span class="brand-sub">Business Tracker</span>
+      </div>
+    </div>
+    <nav class="nav" id="nav">
+      <button class="nav-item active" data-view="dashboard"><span>📊</span> Dashboard</button>
+      <button class="nav-item" data-view="sales"><span>💰</span> Sales</button>
+      <button class="nav-item" data-view="purchases"><span>📦</span> Purchases</button>
+      <button class="nav-item" data-view="expenses"><span>🧾</span> Expenses</button>
+      <button class="nav-item" data-view="inventory"><span>🚗</span> Inventory</button>
+      <button class="nav-item" data-view="customers"><span>👥</span> Customers</button>
+      <button class="nav-item" data-view="suppliers"><span>🏭</span> Suppliers</button>
+      <button class="nav-item" data-view="staff"><span>🧑‍🔧</span> Staff</button>
+      <button class="nav-item" data-view="reports"><span>📈</span> Reports</button>
+      <button class="nav-item" data-view="settings"><span>⚙️</span> Settings</button>
+    </nav>
+    <div class="sidebar-foot">
+      <button class="btn btn-primary btn-block" id="installBtn" style="display:none;margin-bottom:8px">⬇️ Install as app</button>
+      <button class="btn btn-ghost btn-block" id="quickBackup">⬇️ Backup data</button>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+    <header class="topbar">
+      <button class="hamburger" id="hamburger">☰</button>
+      <h1 id="viewTitle">Dashboard</h1>
+      <div class="topbar-actions" id="topbarActions"></div>
+      <div class="user-menu" id="userMenu"></div>
+    </header>
+    <div class="content" id="content"></div>
+  </main>
+
+  <!-- Bottom nav (mobile) -->
+  <nav class="bottomnav" id="bottomNav">
+    <div class="inner">
+      <button class="bn-item nav-item active" data-view="dashboard"><span class="bn-ico">📊</span>Home<i class="bn-dot"></i></button>
+      <button class="bn-item nav-item" data-view="sales"><span class="bn-ico">💰</span>Sales<i class="bn-dot"></i></button>
+      <button class="bn-item nav-item" data-view="purchases"><span class="bn-ico">📦</span>Buy<i class="bn-dot"></i></button>
+      <button class="bn-item nav-item" data-view="expenses"><span class="bn-ico">🧾</span>Spend<i class="bn-dot"></i></button>
+      <button class="bn-item" id="moreBtn"><span class="bn-ico">⋯</span>More<i class="bn-dot"></i></button>
+    </div>
+  </nav>
+
+  <!-- Quick-add FAB (mobile) -->
+  <button class="fab" id="fab" aria-label="Quick add">＋</button>
+</div>
+
+<!-- Login screen -->
+<div class="login-screen" id="loginScreen">
+  <form class="login-card" id="loginForm">
+    <div class="login-logo">🏎️</div>
+    <h2 id="loginTitle">RC Manager</h2>
+    <p class="login-sub">Sign in to your business</p>
+    <div class="field"><label>Username</label><input id="loginUser" autocomplete="username" required></div>
+    <div class="field"><label>Password</label><input id="loginPass" type="password" autocomplete="current-password" required></div>
+    <div class="login-err" id="loginErr"></div>
+    <button type="submit" class="btn btn-primary btn-block">Sign in →</button>
+    <p class="login-hint" id="loginHint"></p>
+  </form>
+</div>
+
+<!-- Modal -->
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal" id="modal">
+    <div class="modal-head">
+      <h2 id="modalTitle">Title</h2>
+      <button class="modal-close" id="modalClose">✕</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast" class="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script>
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    });
+  }
+</script>
+</body>
+</html>
