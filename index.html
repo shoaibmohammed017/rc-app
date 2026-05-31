@@ -114,7 +114,27 @@
 <script>
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => {
-      navigator.serviceWorker.register("sw.js").catch(() => {});
+      navigator.serviceWorker.register("sw.js").then((reg) => {
+        // check for updates on each load
+        reg.update();
+        // when a new worker installs, tell it to take over immediately
+        reg.addEventListener("updatefound", () => {
+          const nw = reg.installing;
+          if (!nw) return;
+          nw.addEventListener("statechange", () => {
+            if (nw.state === "installed" && navigator.serviceWorker.controller) {
+              nw.postMessage("SKIP_WAITING");
+            }
+          });
+        });
+      }).catch(() => {});
+      // reload once when the new worker takes control, so the user sees the update
+      let refreshed = false;
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (refreshed) return;
+        refreshed = true;
+        window.location.reload();
+      });
     });
   }
 </script>
