@@ -28,9 +28,13 @@ function defaultData(){
 }
 
 /* ---------- Cloud (Supabase) setup ---------- */
+/* NO-LOGIN MODE: cloud + login are turned off. The app opens straight to the
+   dashboard and saves data locally on this device. To re-enable cloud login
+   later, set NO_LOGIN = false. */
+const NO_LOGIN = true;
 const CFG = window.RC_CONFIG || {};
 const BIZ_ID = CFG.BUSINESS_ID || "main";
-const CLOUD = !!(window.supabase && CFG.SUPABASE_URL && CFG.SUPABASE_KEY);
+const CLOUD = !NO_LOGIN && !!(window.supabase && CFG.SUPABASE_URL && CFG.SUPABASE_KEY);
 let sb = null;
 if (CLOUD) { try { sb = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_KEY); } catch(e){ console.warn("Supabase init failed", e); } }
 
@@ -87,6 +91,7 @@ function login(username, password){
   return true;
 }
 async function logout(){
+  if(NO_LOGIN){ go("dashboard"); return; }
   if(CLOUD && sb){ try{ await sb.auth.signOut(); }catch(e){} }
   currentUser = null;
   localStorage.removeItem(SESSION_KEY);
@@ -269,7 +274,7 @@ function openMoreSheet(){
   openModal("More", rows +
     `<button class="sheet-row" id="sheetBackup"><span class="sheet-ico">⬇️</span><span>Backup data<small>Download a safe copy</small></span></button>` +
     (deferredPrompt?`<button class="sheet-row" id="sheetInstall"><span class="sheet-ico">📲</span><span>Install app<small>Add to home screen</small></span></button>`:"") +
-    `<button class="sheet-row" id="sheetLogout"><span class="sheet-ico">🚪</span><span>Logout<small>${esc(me().name||"")}</small></span></button>`);
+    (NO_LOGIN?"":`<button class="sheet-row" id="sheetLogout"><span class="sheet-ico">🚪</span><span>Logout<small>${esc(me().name||"")}</small></span></button>`));
   $$("#modalBody [data-go]").forEach(b=>b.onclick=()=>{ buzz(); go(b.dataset.go); });
   const bk=$("#sheetBackup"); if(bk) bk.onclick=()=>{ backup(); closeModal(); };
   const ins=$("#sheetInstall"); if(ins) ins.onclick=async()=>{ if(deferredPrompt){ deferredPrompt.prompt(); await deferredPrompt.userChoice; deferredPrompt=null; } closeModal(); };
@@ -1350,6 +1355,7 @@ function applyTheme(t){
 function setTheme(t){ localStorage.setItem(THEME_KEY,t); applyTheme(t); }
 
 function renderUserMenu(){
+  if(NO_LOGIN){ $("#userMenu").innerHTML=""; return; }
   const u=me();
   const initials=(u.name||"?").trim().split(/\s+/).map(w=>w[0]).slice(0,2).join("").toUpperCase();
   $("#userMenu").innerHTML=`
@@ -1426,6 +1432,14 @@ async function init(){
   }
 
   applyBranding();
+  // NO-LOGIN MODE: skip the login screen and open straight to the dashboard.
+  if(NO_LOGIN){
+    currentUser = (DATA.users && DATA.users[0]) || { id:"local", name:"Owner", role:"admin" };
+    currentUser.role = "admin"; // full access to everything, including Settings
+    $("#loginScreen").classList.remove("open");
+    startApp();
+    return;
+  }
   let restored=false;
   if(CLOUD) restored = await cloudRestore();
   else restored = restoreSession();
