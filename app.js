@@ -527,15 +527,16 @@ function renderDashboard(){
     html += `<div class="alert">⚠️ <strong>${low.length}</strong> item(s) are low on stock — restock soon: ${low.slice(0,4).map(p=>esc(p.name)).join(", ")}${low.length>4?"…":""}</div>`;
   }
 
+  const K=(cls,key,label,val,sub)=>`<div class="kpi ${cls} kpi-click" data-kpi="${key}" role="button" tabindex="0"><div class="kpi-label">${label}</div><div class="kpi-value">${val}</div><div class="kpi-sub">${sub} ›</div></div>`;
   html += `<div class="kpi-grid">
-    <div class="kpi green"><div class="kpi-label">Total Revenue</div><div class="kpi-value">${money(totalRevenue)}</div><div class="kpi-sub">${sales.length} sale(s)</div></div>
-    <div class="kpi ${netProfit>=0?"green":"red"}"><div class="kpi-label">Net Profit</div><div class="kpi-value">${money(netProfit)}</div><div class="kpi-sub">After all expenses</div></div>
-    <div class="kpi cyan"><div class="kpi-label">Gross Profit</div><div class="kpi-value">${money(grossProfit)}</div><div class="kpi-sub">Revenue − cost of goods</div></div>
-    <div class="kpi red"><div class="kpi-label">Total Expenses</div><div class="kpi-value">${money(totalExpenses)}</div><div class="kpi-sub">${expenses.length} entries</div></div>
-    <div class="kpi amber"><div class="kpi-label">Stock Value</div><div class="kpi-value">${money(stockValue())}</div><div class="kpi-sub">${DATA.products.length} products</div></div>
-    <div class="kpi"><div class="kpi-label">Money to Collect</div><div class="kpi-value">${money(salesDue)}</div><div class="kpi-sub">Unpaid by customers</div></div>
-    <div class="kpi"><div class="kpi-label">Money to Pay</div><div class="kpi-value">${money(purchDue)}</div><div class="kpi-sub">Owed to suppliers</div></div>
-    <div class="kpi"><div class="kpi-label">This Month</div><div class="kpi-value">${money(mRev-mExp)}</div><div class="kpi-sub">${money(mRev)} in · ${money(mExp)} out</div></div>
+    ${K("green","revenue","Total Revenue",money(totalRevenue),`${sales.length} sale(s)`)}
+    ${K(netProfit>=0?"green":"red","netprofit","Net Profit",money(netProfit),"After all expenses")}
+    ${K("cyan","grossprofit","Gross Profit",money(grossProfit),"Revenue − cost of goods")}
+    ${K("red","expenses","Total Expenses",money(totalExpenses),`${expenses.length} entries`)}
+    ${K("amber","stock","Stock Value",money(stockValue()),`${DATA.products.length} products`)}
+    ${K("","collect","Money to Collect",money(salesDue),"Unpaid by customers")}
+    ${K("","pay","Money to Pay",money(purchDue),"Owed to suppliers")}
+    ${K("","month","This Month",money(mRev-mExp),`${money(mRev)} in · ${money(mExp)} out`)}
   </div>`;
 
   // Current month chart
@@ -626,6 +627,108 @@ function renderDashboard(){
       <div class="bar-track"><div class="bar-fill" style="width:${v/maxc*100}%"></div></div>
       <div class="val">${money(v)}</div></div>`).join("") : `<div class="empty">No sales yet</div>`;
 }
+
+/* ---------- Dashboard KPI detail sheets ---------- */
+function kpiList(rows, emptyMsg){
+  if(!rows.length) return `<div class="empty">${esc(emptyMsg||"Nothing here yet")}</div>`;
+  return `<div class="kpi-detail-list">`+rows.map(r=>`
+    <div class="kpi-di"${r.go?` data-go="${r.go}"`:""}${r.go?' role="button" tabindex="0"':""}>
+      <div><div class="li-main">${r.main}</div><div class="li-sub">${r.sub||""}</div></div>
+      <div class="kpi-di-val ${r.cls||""}">${r.val||""}</div>
+    </div>`).join("")+`</div>`;
+}
+function statRow(label,val,strong){ return `<div class="kpi-stat"><span>${esc(label)}</span><span class="${strong?'kpi-di-val':''}">${val}</span></div>`; }
+function groupSum(arr, keyFn, valFn){
+  const m={}; arr.forEach(x=>{ const k=keyFn(x)||"—"; m[k]=(m[k]||0)+(Number(valFn(x))||0); });
+  return Object.entries(m).sort((a,b)=>b[1]-a[1]);
+}
+
+window.openKpiDetail=(key)=>{
+  const sales=DATA.sales, purchases=DATA.purchases, expenses=DATA.expenses;
+  const tm=monthKey(today());
+  let title="", body="";
+
+  if(key==="revenue"){
+    title="Total Revenue";
+    const byCh=groupSum(sales, s=>s.channel, saleTotal);
+    const recent=[...sales].sort((a,b)=>(b.date||"").localeCompare(a.date||"")).slice(0,8);
+    body = statRow("Total revenue", money(sumBy(sales,saleTotal)), true)
+      + statRow("Number of sales", num(sales.length))
+      + statRow("Average sale", money(sales.length?sumBy(sales,saleTotal)/sales.length:0))
+      + sec("By channel") + (byCh.length?byCh.map(([n,v])=>statRow(n,money(v))).join(""):emptyLine())
+      + sec("Recent sales")
+      + kpiList(recent.map(s=>({main:esc((productById(s.productId)||{}).name||s.itemName||"Item")+" ×"+num(s.qty), sub:fmtDate(s.date)+" · "+esc(s.customer||"Walk-in"), val:money(saleTotal(s)), cls:"pos"})), "No sales yet");
+  }
+  else if(key==="netprofit" || key==="grossprofit"){
+    const rev=sumBy(sales,saleTotal), cogs=sumBy(sales,saleCost), gross=rev-cogs, exp=sumBy(expenses,e=>e.amount), net=gross-exp;
+    title = key==="netprofit"?"Net Profit":"Gross Profit";
+    body = statRow("Revenue", money(rev))
+      + statRow("− Cost of goods sold", money(cogs))
+      + statRow("= Gross profit", money(gross), true)
+      + (key==="netprofit"? statRow("− Operating expenses", money(exp)) + statRow("= Net profit", money(net), true) : "")
+      + statRow("Profit margin", (rev? ((key==="netprofit"?net:gross)/rev*100).toFixed(1):0)+"%")
+      + sec("Most profitable products")
+      + (()=>{ const g=groupSum(sales, s=>(productById(s.productId)||{}).name||s.itemName||"Item", saleProfit); return g.length?g.slice(0,8).map(([n,v])=>statRow(n,money(v))).join(""):emptyLine(); })();
+  }
+  else if(key==="expenses"){
+    title="Total Expenses";
+    const byCat=groupSum(expenses, e=>e.category, e=>e.amount);
+    const byWho=groupSum(expenses, e=>e.staff, e=>e.amount);
+    const recent=[...expenses].sort((a,b)=>(b.date||"").localeCompare(a.date||"")).slice(0,8);
+    body = statRow("Total expenses", money(sumBy(expenses,e=>e.amount)), true)
+      + statRow("Entries", num(expenses.length))
+      + sec("By category") + (byCat.length?byCat.map(([n,v])=>statRow(n,money(v))).join(""):emptyLine())
+      + sec("By person") + (byWho.length?byWho.map(([n,v])=>statRow(n,money(v))).join(""):emptyLine())
+      + sec("Recent")
+      + kpiList(recent.map(e=>({main:esc(e.category||"Expense"), sub:fmtDate(e.date)+" · "+esc(e.staff||""), val:money(e.amount), cls:"neg"})), "No expenses yet");
+  }
+  else if(key==="stock"){
+    title="Stock Value";
+    const prods=[...DATA.products].sort((a,b)=>(stockOf(b)*(Number(b.cost)||0))-(stockOf(a)*(Number(a.cost)||0)));
+    body = statRow("Total stock value", money(stockValue()), true)
+      + statRow("Products", num(DATA.products.length))
+      + statRow("Total units in stock", num(DATA.products.reduce((s,p)=>s+stockOf(p),0)))
+      + sec("Per product (value)")
+      + kpiList(prods.map(p=>({main:esc(p.name), sub:`${num(stockOf(p))} in stock · cost ${money(p.cost)}`, val:money(stockOf(p)*(Number(p.cost)||0)), go:"inventory"})), "No products yet");
+  }
+  else if(key==="collect"){
+    title="Money to Collect";
+    const due=sales.filter(s=>saleDue(s)>0).sort((a,b)=>saleDue(b)-saleDue(a));
+    const byCust=groupSum(due, s=>s.customer||"Walk-in", saleDue);
+    body = statRow("Total to collect", money(sumBy(sales,saleDue)), true)
+      + statRow("Unpaid sales", num(due.length))
+      + sec("By customer") + (byCust.length?byCust.map(([n,v])=>statRow(n,money(v))).join(""):emptyLine())
+      + sec("Unpaid sales")
+      + kpiList(due.map(s=>({main:esc(s.customer||"Walk-in")+" — "+esc((productById(s.productId)||{}).name||s.itemName||"Item"), sub:fmtDate(s.date)+" · "+esc(s.payStatus||""), val:money(saleDue(s)), cls:"neg", go:"sales"})), "Everyone has paid 🎉");
+  }
+  else if(key==="pay"){
+    title="Money to Pay";
+    const due=purchases.filter(p=>purchaseDue(p)>0).sort((a,b)=>purchaseDue(b)-purchaseDue(a));
+    const bySup=groupSum(due, p=>p.supplier||"—", purchaseDue);
+    body = statRow("Total to pay", money(sumBy(purchases,purchaseDue)), true)
+      + statRow("Unpaid purchases", num(due.length))
+      + sec("By supplier") + (bySup.length?bySup.map(([n,v])=>statRow(n,money(v))).join(""):emptyLine())
+      + sec("Unpaid purchases")
+      + kpiList(due.map(p=>({main:esc(p.supplier||"Supplier")+" — "+esc((productById(p.productId)||{}).name||p.itemName||"Item"), sub:fmtDate(p.date)+" · "+esc(p.payStatus||""), val:money(purchaseDue(p)), cls:"neg", go:"purchases"})), "Nothing owed 🎉");
+  }
+  else if(key==="month"){
+    title="This Month — "+new Date().toLocaleDateString("en-IN",{month:"long",year:"numeric"});
+    const mSales=sales.filter(s=>monthKey(s.date)===tm), mExp=expenses.filter(e=>monthKey(e.date)===tm), mPur=purchases.filter(p=>monthKey(p.date)===tm);
+    const rev=sumBy(mSales,saleTotal), exp=sumBy(mExp,e=>e.amount), pur=sumBy(mPur,purchaseTotal);
+    body = statRow("Money in (sales)", money(rev), true)
+      + statRow("Money out (expenses)", money(exp))
+      + statRow("Stock bought", money(pur))
+      + statRow("Net this month", money(rev-exp), true)
+      + statRow("Sales count", num(mSales.length))
+      + sec("This month's sales")
+      + kpiList([...mSales].sort((a,b)=>(b.date||"").localeCompare(a.date||"")).map(s=>({main:esc((productById(s.productId)||{}).name||s.itemName||"Item")+" ×"+num(s.qty), sub:fmtDate(s.date)+" · "+esc(s.customer||"Walk-in"), val:money(saleTotal(s)), cls:"pos"})), "No sales yet this month");
+  }
+  function sec(t){ return `<div class="kpi-sec">${esc(t)}</div>`; }
+  function emptyLine(){ return `<div class="li-sub" style="padding:6px 2px">No data</div>`; }
+
+  openModal(title, body);
+  $$("#modalBody [data-go]").forEach(el=>el.onclick=()=>{ buzz(); go(el.dataset.go); });
+};
 
 function lastNMonths(n){
   const out=[]; const d=new Date();
