@@ -565,6 +565,12 @@ function renderDashboard(){
 
   c.innerHTML = html;
 
+  // make KPI tiles clickable → detail sheet
+  $$(".kpi-click").forEach(el=>{
+    el.onclick=()=>{ buzz(); openKpiDetail(el.dataset.kpi); };
+    el.onkeydown=(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); openKpiDetail(el.dataset.kpi); } };
+  });
+
   // Current month chart — week-by-week revenue vs spending
   const mk = monthKey(today());
   const now = new Date();
