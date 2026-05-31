@@ -10,7 +10,7 @@ const STORE_KEY = "rcbiz_data_v1";
 function defaultData(){
   return {
     settings:{
-      businessName:"RC Manager",
+      businessName:"PRC Sales App",
       currency:"₹",
       lowStockDefault:3,
       address:"", phone:"", gstin:"",
@@ -1478,8 +1478,8 @@ function seed(){
    BRANDING + INIT
    ============================================================ */
 function applyBranding(){
-  $("#brandName").textContent=DATA.settings.businessName||"RC Manager";
-  document.title=(DATA.settings.businessName||"RC Manager")+" — Business Tracker";
+  $("#brandName").textContent=DATA.settings.businessName||"PRC Sales App";
+  document.title=DATA.settings.businessName||"PRC Sales App";
 }
 
 /* PWA install prompt */

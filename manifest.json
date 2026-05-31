@@ -1,6 +1,6 @@
 {
-  "name": "PRC Cars — Business Manager",
-  "short_name": "PRC Cars",
+  "name": "PRC Sales App",
+  "short_name": "PRC Sales",
   "description": "Track RC car sales, purchases, expenses, inventory and profit.",
   "start_url": "./index.html",
   "scope": "./",
