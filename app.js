@@ -948,17 +948,28 @@ function purchaseForm(id){
    inventory if new (or links to the existing one) and adds its quantity to stock.
    Stored as one purchase record per line (sharing a poNo) so all reports,
    dues, CSV and sync keep working unchanged. */
+function poColorRowHTML(){
+  return `<div class="po-crow">
+    <input class="po-color" list="poColorList" placeholder="Colour" autocomplete="off">
+    <input class="po-cqty" type="number" inputmode="numeric" placeholder="Qty" min="0">
+    <span class="po-camt">₹0</span>
+    <button type="button" class="icon-btn del po-cdel" title="Remove colour">✕</button>
+  </div>`;
+}
 function poLineHTML(){
   return `<div class="po-line">
-    <input class="po-model" list="poProdList" placeholder="Model / product name" autocomplete="off">
-    <input class="po-color" list="poColorList" placeholder="Colour (optional)" autocomplete="off">
-    <div class="po-row2">
-      <input class="po-qty"  type="number" inputmode="numeric" placeholder="Qty" min="0">
-      <input class="po-rate" type="number" inputmode="decimal" placeholder="₹/unit" min="0">
-      <span class="po-amt">₹0</span>
-      <button type="button" class="icon-btn del po-del" title="Remove line">✕</button>
+    <div class="po-line-head">
+      <input class="po-model" list="poProdList" placeholder="Model / product name" autocomplete="off">
+      <button type="button" class="icon-btn del po-del" title="Remove model">✕</button>
     </div>
+    <div class="po-rate-wrap">
+      <span class="po-rate-lbl">Cost ₹/unit</span>
+      <input class="po-rate" type="number" inputmode="decimal" placeholder="0" min="0">
+    </div>
+    <div class="po-colors"></div>
+    <button type="button" class="btn btn-sm po-addcolor">＋ Add colour</button>
     <div class="po-hint"></div>
+    <div class="po-linetot"></div>
   </div>`;
 }
 function purchaseOrderForm(){
@@ -994,41 +1005,65 @@ function purchaseOrderForm(){
 
   const linesEl = $("#poLines");
   const addLine = ()=>{ linesEl.insertAdjacentHTML("beforeend", poLineHTML()); wireLine(linesEl.lastElementChild); recompute(); };
-  function wireLine(row){
-    const model=row.querySelector(".po-model"), color=row.querySelector(".po-color"),
-          qty=row.querySelector(".po-qty"), rate=row.querySelector(".po-rate"), hint=row.querySelector(".po-hint");
-    const onModel=()=>{
-      const nm=model.value.trim();
-      const prod=findVariant(nm, color.value);
-      if(!nm){ hint.textContent=""; hint.className="po-hint"; return; }
-      if(prod){
-        hint.textContent=`✓ in inventory · stock ${stockOf(prod)}`; hint.className="po-hint exist";
-        if(!rate.value && prod.cost) rate.value=prod.cost;   // auto-fill last cost
-      } else {
-        hint.textContent="＋ new — will be created in inventory"; hint.className="po-hint new";
-      }
+
+  function addColorRow(line){
+    const wrap = line.querySelector(".po-colors");
+    wrap.insertAdjacentHTML("beforeend", poColorRowHTML());
+    wireColorRow(line, wrap.lastElementChild);
+    recompute();
+  }
+  function wireColorRow(line, crow){
+    crow.querySelector(".po-color").addEventListener("input", ()=>updateHint(line));
+    crow.querySelector(".po-cqty").addEventListener("input", recompute);
+    crow.querySelector(".po-cdel").onclick=()=>{
+      crow.remove();
+      if(!line.querySelector(".po-crow")) addColorRow(line); // always keep at least one
+      recompute();
     };
-    model.addEventListener("input", onModel);
-    color.addEventListener("input", onModel);
-    [qty,rate].forEach(el=>el.addEventListener("input", recompute));
-    row.querySelector(".po-del").onclick=()=>{ row.remove(); if(!linesEl.children.length) addLine(); recompute(); };
+  }
+  function updateHint(line){
+    const model=line.querySelector(".po-model").value.trim();
+    const rate=line.querySelector(".po-rate");
+    const hint=line.querySelector(".po-hint");
+    if(!model){ hint.textContent=""; return; }
+    const parts=[];
+    $$(".po-crow", line).forEach(crow=>{
+      const c=crow.querySelector(".po-color").value.trim();
+      const prod=findVariant(model, c);
+      if(prod){ if(!rate.value && prod.cost) rate.value=prod.cost; parts.push(`${c||"(no colour)"}: ✓ stock ${stockOf(prod)}`); }
+      else parts.push(`${c||"(no colour)"}: ＋ new`);
+    });
+    hint.textContent = parts.join("  ·  ");
+  }
+  function wireLine(line){
+    line.querySelector(".po-model").addEventListener("input", ()=>{ updateHint(line); recompute(); });
+    line.querySelector(".po-rate").addEventListener("input", ()=>{ updateHint(line); recompute(); });
+    line.querySelector(".po-addcolor").onclick=()=>addColorRow(line);
+    line.querySelector(".po-del").onclick=()=>{ line.remove(); if(!linesEl.children.length) addLine(); recompute(); };
+    addColorRow(line); // start with one colour row
   }
   function recompute(){
-    let items=0;
-    $$("#poLines .po-line").forEach(row=>{
-      const q=Number(row.querySelector(".po-qty").value)||0;
-      const r=Number(row.querySelector(".po-rate").value)||0;
-      row.querySelector(".po-amt").textContent=money(q*r);
-      items+=q*r;
+    let grand=0;
+    $$(".po-line", linesEl).forEach(line=>{
+      const rate=Number(line.querySelector(".po-rate").value)||0;
+      let lineTot=0;
+      $$(".po-crow", line).forEach(crow=>{
+        const q=Number(crow.querySelector(".po-cqty").value)||0;
+        crow.querySelector(".po-camt").textContent=money(q*rate);
+        lineTot+=q*rate;
+      });
+      const lt=line.querySelector(".po-linetot");
+      if(lt) lt.textContent = lineTot? ("Model total: "+money(lineTot)) : "";
+      grand+=lineTot;
     });
-    const extra=Number($("#poExtra").value)||0;
-    $("#poGrand").textContent=money(items+extra);
+    grand += Number($("#poExtra").value)||0;
+    $("#poGrand").textContent=money(grand);
   }
 
   $("#poAddLine").onclick=addLine;
   $("#poExtra").addEventListener("input", recompute);
   $("#poPay").addEventListener("change", ()=>{ $("#poPaidWrap").style.display = $("#poPay").value==="Partial"?"":"none"; });
-  addLine();  // start with one row
+  addLine();  // start with one model
 
   $("#poSave").onclick=()=>{
     const date=$("#poDate").value||today();
@@ -1041,14 +1076,17 @@ function purchaseOrderForm(){
     const paidInput=Number($("#poPaid").value)||0;
 
     const lines=[];
-    $$("#poLines .po-line").forEach(row=>{
-      const name=row.querySelector(".po-model").value.trim();
-      const color=row.querySelector(".po-color").value.trim();
-      const qty=Number(row.querySelector(".po-qty").value)||0;
-      const rate=Number(row.querySelector(".po-rate").value)||0;
-      if(name && qty>0) lines.push({name,color,qty,rate});
+    $$(".po-line", linesEl).forEach(line=>{
+      const name=line.querySelector(".po-model").value.trim();
+      const rate=Number(line.querySelector(".po-rate").value)||0;
+      if(!name) return;
+      $$(".po-crow", line).forEach(crow=>{
+        const color=crow.querySelector(".po-color").value.trim();
+        const qty=Number(crow.querySelector(".po-cqty").value)||0;
+        if(qty>0) lines.push({name,color,qty,rate});
+      });
     });
-    if(!lines.length){ toast("Add at least one model with a quantity","err"); return; }
+    if(!lines.length){ toast("Add at least one model with a colour & quantity","err"); return; }
 
     const itemsTotal=lines.reduce((s,l)=>s+l.qty*l.rate,0);
     const grand=itemsTotal+extra;
@@ -1076,7 +1114,7 @@ function purchaseOrderForm(){
     });
     maybeAddSupplier(supplier);
     save(); closeModal();
-    toast(`${lines.length} model(s) added to purchases & inventory`,"ok");
+    toast(`${lines.length} colour-variant(s) added to purchases & inventory`,"ok");
     if(currentView==="purchases") drawPurchases(); else go(currentView);
   };
 }

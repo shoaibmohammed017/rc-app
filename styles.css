@@ -340,3 +340,18 @@ td.num,th.num{ text-align:right }
 /* Purchase Order — colour input (full width, above qty/rate row) */
 .po-line .po-color{ width:100%; margin:6px 0; background:var(--surface); border:1px solid var(--line);
   border-radius:10px; padding:10px 12px; color:var(--text); font-size:16px }
+
+/* ---------- Purchase Order: model → multiple colour rows ---------- */
+.po-line-head{ display:flex; gap:6px; align-items:center }
+.po-line-head .po-model{ flex:1; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:11px 12px; color:var(--text); font-size:16px; min-width:0 }
+.po-rate-wrap{ display:flex; align-items:center; gap:8px; margin:8px 0 4px }
+.po-rate-lbl{ font-size:12px; color:var(--muted); font-weight:700; white-space:nowrap }
+.po-rate-wrap .po-rate{ flex:1; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:9px 12px; color:var(--text); font-size:16px; min-width:0 }
+.po-colors{ display:flex; flex-direction:column; gap:6px; margin:6px 0 }
+.po-crow{ display:flex; gap:6px; align-items:center }
+.po-crow .po-color{ flex:1; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:9px 10px; color:var(--text); font-size:16px; min-width:0 }
+.po-crow .po-cqty{ width:64px; flex:0 0 auto; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:9px 8px; color:var(--text); font-size:16px }
+.po-crow .po-camt{ width:84px; flex:0 0 auto; text-align:right; font-weight:800; font-size:13px; white-space:nowrap }
+.po-addcolor{ margin-top:2px }
+.po-linetot{ font-size:12px; font-weight:800; color:var(--primary-dark); text-align:right; margin-top:6px; min-height:14px }
+.dark .po-linetot{ color:var(--amber) }
