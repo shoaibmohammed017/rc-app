@@ -336,3 +336,7 @@ td.num,th.num{ text-align:right }
 .kpi-detail-list{ display:flex; flex-direction:column }
 .kpi-di{ display:flex; justify-content:space-between; align-items:center; gap:10px; padding:11px 4px; border-bottom:1px solid var(--line-soft) }
 .kpi-di[role="button"]{ cursor:pointer } .kpi-di[role="button"]:active{ background:var(--surface-2) }
+
+/* Purchase Order — colour input (full width, above qty/rate row) */
+.po-line .po-color{ width:100%; margin:6px 0; background:var(--surface); border:1px solid var(--line);
+  border-radius:10px; padding:10px 12px; color:var(--text); font-size:16px }

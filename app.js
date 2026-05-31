@@ -252,6 +252,11 @@ function toast(msg,type=""){
 /* ---------- Derived calculations ---------- */
 function productById(id){ return DATA.products.find(p=>p.id===id); }
 function stockOf(p){ return Number(p.stock)||0; }
+function prodLabel(p){ return p ? (p.name + (p.color ? " · " + p.color : "")) : ""; }
+function findVariant(name, color){
+  const n = (name||"").trim().toLowerCase(), c = (color||"").trim().toLowerCase();
+  return DATA.products.find(p => (p.name||"").toLowerCase() === n && (p.color||"").toLowerCase() === c);
+}
 function stockValue(){ return DATA.products.reduce((s,p)=>s+Math.max(0,stockOf(p))*(Number(p.cost)||0),0); }
 function lowStockProducts(){
   return DATA.products.filter(p=>stockOf(p) <= (Number(p.reorder)|| DATA.settings.lowStockDefault));
@@ -784,7 +789,7 @@ function drawSales(){
   rows.sort((a,b)=>(b.date||"").localeCompare(a.date||""));
   const cols=[
     {label:"Date",render:s=>fmtDate(s.date)},
-    {label:"Product",render:s=>esc((productById(s.productId)||{}).name||s.itemName||"—")},
+    {label:"Product",render:s=>esc(prodLabel(productById(s.productId))||s.itemName||"—")},
     {label:"Qty",num:true,render:s=>num(s.qty)},
     {label:"Price",num:true,render:s=>money(s.price)},
     {label:"Total",num:true,render:s=>`<strong>${money(saleTotal(s))}</strong>`},
@@ -805,7 +810,7 @@ function saleForm(id){
   buildForm([
     {name:"date",label:"Date",type:"date",value:s.date,required:true},
     {name:"productId",label:"Product (from inventory)",type:"select",value:s.productId,placeholder:"— Select / or type below —",
-      options:DATA.products.map(p=>({value:p.id,label:`${p.name} (stock ${stockOf(p)})`}))},
+      options:DATA.products.map(p=>({value:p.id,label:`${prodLabel(p)} (stock ${stockOf(p)})`}))},
     {name:"itemName",label:"Or item name (if not in inventory)",value:s.itemName,placeholder:"e.g. Custom RC build"},
     {name:"qty",label:"Quantity",type:"number",step:"1",value:s.qty,required:true},
     {name:"price",label:"Selling price (per unit)",type:"number",value:s.price,required:true},
@@ -877,7 +882,7 @@ function drawPurchases(){
   rows.sort((a,b)=>(b.date||"").localeCompare(a.date||""));
   const cols=[
     {label:"Date",render:p=>fmtDate(p.date)},
-    {label:"Product",render:p=>esc((productById(p.productId)||{}).name||p.itemName||"—")},
+    {label:"Product",render:p=>esc(prodLabel(productById(p.productId))||p.itemName||"—")},
     {label:"Qty",num:true,render:p=>num(p.qty)},
     {label:"Cost/unit",num:true,render:p=>money(p.price)},
     {label:"Shipping",num:true,render:p=>money(p.shipping)},
@@ -894,7 +899,7 @@ function purchaseForm(id){
   buildForm([
     {name:"date",label:"Date",type:"date",value:p.date,required:true},
     {name:"productId",label:"Product (from inventory)",type:"select",value:p.productId,placeholder:"— Select / or type below —",
-      options:DATA.products.map(pr=>({value:pr.id,label:pr.name}))},
+      options:DATA.products.map(pr=>({value:pr.id,label:prodLabel(pr)}))},
     {name:"itemName",label:"Or new item name",value:p.itemName,placeholder:"Creates a new product if not selected above"},
     {name:"qty",label:"Quantity",type:"number",step:"1",value:p.qty,required:true},
     {name:"price",label:"Cost price (per unit)",type:"number",value:p.price,required:true},
@@ -946,6 +951,7 @@ function purchaseForm(id){
 function poLineHTML(){
   return `<div class="po-line">
     <input class="po-model" list="poProdList" placeholder="Model / product name" autocomplete="off">
+    <input class="po-color" list="poColorList" placeholder="Colour (optional)" autocomplete="off">
     <div class="po-row2">
       <input class="po-qty"  type="number" inputmode="numeric" placeholder="Qty" min="0">
       <input class="po-rate" type="number" inputmode="decimal" placeholder="₹/unit" min="0">
@@ -958,10 +964,12 @@ function poLineHTML(){
 function purchaseOrderForm(){
   const prodOpts = DATA.products.map(p=>`<option value="${esc(p.name)}">`).join("");
   const supOpts  = DATA.suppliers.map(s=>`<option value="${esc(s.name)}">`).join("");
+  const colorOpts = [...new Set(DATA.products.map(p=>p.color).filter(Boolean))].map(c=>`<option value="${esc(c)}">`).join("");
   const staffSel = DATA.staff.map(x=>`<option>${esc(x.name)}</option>`).join("");
   openModal("New Purchase Order", `
     <datalist id="poProdList">${prodOpts}</datalist>
     <datalist id="poSupList">${supOpts}</datalist>
+    <datalist id="poColorList">${colorOpts}</datalist>
     <div class="form-grid">
       <div class="field"><label>Date *</label><input type="date" id="poDate" value="${today()}"></div>
       <div class="field"><label>Supplier / bought from</label><input id="poSupplier" list="poSupList" placeholder="Type or pick"></div>
@@ -987,11 +995,11 @@ function purchaseOrderForm(){
   const linesEl = $("#poLines");
   const addLine = ()=>{ linesEl.insertAdjacentHTML("beforeend", poLineHTML()); wireLine(linesEl.lastElementChild); recompute(); };
   function wireLine(row){
-    const model=row.querySelector(".po-model"), qty=row.querySelector(".po-qty"),
-          rate=row.querySelector(".po-rate"), hint=row.querySelector(".po-hint");
+    const model=row.querySelector(".po-model"), color=row.querySelector(".po-color"),
+          qty=row.querySelector(".po-qty"), rate=row.querySelector(".po-rate"), hint=row.querySelector(".po-hint");
     const onModel=()=>{
-      const nm=model.value.trim().toLowerCase();
-      const prod=DATA.products.find(p=>(p.name||"").toLowerCase()===nm);
+      const nm=model.value.trim();
+      const prod=findVariant(nm, color.value);
       if(!nm){ hint.textContent=""; hint.className="po-hint"; return; }
       if(prod){
         hint.textContent=`✓ in inventory · stock ${stockOf(prod)}`; hint.className="po-hint exist";
@@ -1000,7 +1008,8 @@ function purchaseOrderForm(){
         hint.textContent="＋ new — will be created in inventory"; hint.className="po-hint new";
       }
     };
-    model.addEventListener("input", ()=>{ onModel(); });
+    model.addEventListener("input", onModel);
+    color.addEventListener("input", onModel);
     [qty,rate].forEach(el=>el.addEventListener("input", recompute));
     row.querySelector(".po-del").onclick=()=>{ row.remove(); if(!linesEl.children.length) addLine(); recompute(); };
   }
@@ -1034,9 +1043,10 @@ function purchaseOrderForm(){
     const lines=[];
     $$("#poLines .po-line").forEach(row=>{
       const name=row.querySelector(".po-model").value.trim();
+      const color=row.querySelector(".po-color").value.trim();
       const qty=Number(row.querySelector(".po-qty").value)||0;
       const rate=Number(row.querySelector(".po-rate").value)||0;
-      if(name && qty>0) lines.push({name,qty,rate});
+      if(name && qty>0) lines.push({name,color,qty,rate});
     });
     if(!lines.length){ toast("Add at least one model with a quantity","err"); return; }
 
@@ -1047,9 +1057,9 @@ function purchaseOrderForm(){
     const ts=nowISO();
 
     lines.forEach(l=>{
-      let prod=DATA.products.find(p=>(p.name||"").toLowerCase()===l.name.toLowerCase());
+      let prod=findVariant(l.name, l.color);
       if(!prod){
-        prod={id:nextId(),name:l.name,category:"",cost:l.rate,price:0,stock:0,reorder:DATA.settings.lowStockDefault,supplier:supplier||"",updatedAt:ts};
+        prod={id:nextId(),name:l.name,color:l.color||"",category:"",cost:l.rate,price:0,stock:0,reorder:DATA.settings.lowStockDefault,supplier:supplier||"",updatedAt:ts};
         DATA.products.push(prod);
       }
       const lineAmt=l.qty*l.rate;
@@ -1058,7 +1068,7 @@ function purchaseOrderForm(){
       const paid = payStatus==="Paid"?lineTotal : payStatus==="Due"?0
                  : (grand>0 ? Math.round(poPaid*(lineTotal/grand)*100)/100 : 0);
       DATA.purchases.push({
-        id:nextId(), date, productId:prod.id, qty:l.qty, price:l.rate,
+        id:nextId(), date, productId:prod.id, color:l.color||"", qty:l.qty, price:l.rate,
         shipping:shipShare, supplier, staff, payStatus, paid, poNo, notes, updatedAt:ts
       });
       adjustStock(prod.id, +l.qty);
@@ -1145,11 +1155,12 @@ function renderInventory(){
 function drawInventory(){
   let rows=[...DATA.products];
   if(invFilter.cat) rows=rows.filter(p=>p.category===invFilter.cat);
-  if(invFilter.q){const q=invFilter.q;rows=rows.filter(p=>(p.name||"").toLowerCase().includes(q)||(p.sku||"").toLowerCase().includes(q));}
+  if(invFilter.q){const q=invFilter.q;rows=rows.filter(p=>(p.name||"").toLowerCase().includes(q)||(p.sku||"").toLowerCase().includes(q)||(p.color||"").toLowerCase().includes(q));}
   rows.sort((a,b)=>(a.name||"").localeCompare(b.name||""));
   const cols=[
     {label:"Product",render:p=>`<strong>${esc(p.name)}</strong>`},
     {label:"Category",render:p=>esc(p.category||"—")},
+    {label:"Colour",render:p=>esc(p.color||"—")},
     {label:"SKU",render:p=>esc(p.sku||"—")},
     {label:"Stock",num:true,render:p=>{
       const low=stockOf(p)<=(Number(p.reorder)||DATA.settings.lowStockDefault);
@@ -1170,6 +1181,7 @@ function productForm(id){
     {name:"name",label:"Product name",value:p.name,required:true,full:true,placeholder:"e.g. 1:10 Off-road Buggy"},
     {name:"category",label:"Category",type:"select",value:p.category,options:DATA.settings.productCategories,placeholder:"Select",addable:"productCategories"},
     {name:"sku",label:"SKU / Code",value:p.sku,placeholder:"Optional"},
+    {name:"color",label:"Colour",value:p.color,placeholder:"e.g. Red (optional)"},
     {name:"cost",label:"Cost price (per unit)",type:"number",value:p.cost},
     {name:"price",label:"Selling price (per unit)",type:"number",value:p.price},
     {name:"stock",label:"Current stock qty",type:"number",step:"1",value:p.stock},
