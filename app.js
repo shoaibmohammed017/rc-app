@@ -34,6 +34,7 @@ function defaultData(){
    The two are independent — here we run no-login AND synced.
    Set SYNC=false to go back to local-only on this device. */
 const NO_LOGIN = true;
+const APP_PIN = "2328";   // simple PIN lock (replaces username/password)
 const SYNC = true;
 const CFG = window.RC_CONFIG || {};
 const BIZ_ID = CFG.BUSINESS_ID || "main";
@@ -1621,18 +1622,8 @@ function showLogin(){
   $("#loginErr").textContent="";
   $("#loginForm").reset();
   $("#loginTitle").textContent=DATA.settings.businessName||"PRC Sales App";
-  const lbl = $("#loginUser").previousElementSibling;
-  if(CLOUD){
-    if(lbl) lbl.textContent="Email";
-    $("#loginUser").type="email";
-    $("#loginUser").placeholder="you@email.com";
-    $("#loginHint").textContent="Use the email & password created for you in Supabase. First login becomes the admin.";
-  } else {
-    if(lbl) lbl.textContent="Username";
-    const hasDefault=DATA.users.some(u=>u.username==="admin"&&u.password==="admin");
-    $("#loginHint").textContent=hasDefault?"First time? Use  admin / admin  — then change it in Settings → Login IDs.":"";
-  }
-  setTimeout(()=>$("#loginUser").focus(),50);
+  $("#loginHint").textContent="";
+  setTimeout(()=>{ const p=$("#loginPin"); if(p) p.focus(); },50);
 }
 function startApp(){
   $("#loginScreen").classList.remove("open");
@@ -1658,16 +1649,17 @@ async function init(){
 
   $("#loginForm").onsubmit=async (e)=>{
     e.preventDefault();
-    const btn=$("#loginForm button[type=submit]");
-    if(CLOUD){
-      btn.disabled=true; $("#loginErr").textContent="Signing in…";
-      const r=await cloudSignIn($("#loginUser").value, $("#loginPass").value);
-      btn.disabled=false; $("#loginErr").textContent="";
-      if(r.ok) startApp(); else $("#loginErr").textContent=r.msg||"Sign in failed";
-    } else {
-      if(login($("#loginUser").value, $("#loginPass").value)) startApp();
-      else $("#loginErr").textContent="Wrong username or password";
+    const pin=($("#loginPin").value||"").trim();
+    if(pin!==APP_PIN){
+      $("#loginErr").textContent="Wrong PIN";
+      $("#loginPin").value=""; $("#loginPin").focus();
+      try{ buzz(); }catch(_){}
+      return;
     }
+    $("#loginErr").textContent="";
+    const btn=$("#loginForm button[type=submit]"); if(btn) btn.disabled=true;
+    await enterApp();
+    if(btn) btn.disabled=false;
   };
 
   if(CLOUD){
@@ -1680,25 +1672,22 @@ async function init(){
 
   applyBranding();
 
-  // NO-LOGIN mode: open straight to the dashboard. With SYNC on, pull the latest
-  // cloud data first, take a daily auto-backup, and listen for live updates.
-  if(NO_LOGIN){
-    currentUser = (DATA.users && DATA.users[0]) || { id:"local", name:"Owner", role:"admin" };
-    currentUser.role = "admin";
-    $("#loginScreen").classList.remove("open");
-    if(CLOUD){
-      await fetchCloud();
-      autoBackup();
-      setupRealtime();
-    }
-    startApp();
-    return;
-  }
+  // Simple PIN lock: show the PIN screen on every load. enterApp() runs after the correct PIN.
+  showLogin();
+}
 
-  let restored=false;
-  if(CLOUD) restored = await cloudRestore();
-  else restored = restoreSession();
-  if(restored){ startApp(); if(CLOUD){ autoBackup(); setupRealtime(); } } else showLogin();
+// After a correct PIN: become the local owner and (with SYNC on) pull cloud data,
+// take a daily auto-backup, and listen for live cross-device updates.
+async function enterApp(){
+  currentUser = (DATA.users && DATA.users[0]) || { id:"local", name:"Owner", role:"admin" };
+  currentUser.role = "admin";
+  $("#loginScreen").classList.remove("open");
+  if(CLOUD){
+    await fetchCloud();
+    autoBackup();
+    setupRealtime();
+  }
+  startApp();
 }
 
 // Live cross-device updates: when another phone writes, pull + re-render.
