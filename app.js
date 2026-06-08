@@ -253,10 +253,6 @@ function toast(msg,type=""){
 function productById(id){ return DATA.products.find(p=>p.id===id); }
 function stockOf(p){ return Number(p.stock)||0; }
 function prodLabel(p){ return p ? (p.name + (p.color ? " · " + p.color : "")) : ""; }
-function findVariant(name, color){
-  const n = (name||"").trim().toLowerCase(), c = (color||"").trim().toLowerCase();
-  return DATA.products.find(p => (p.name||"").toLowerCase() === n && (p.color||"").toLowerCase() === c);
-}
 function stockValue(){ return DATA.products.reduce((s,p)=>s+Math.max(0,stockOf(p))*(Number(p.cost)||0),0); }
 function lowStockProducts(){
   return DATA.products.filter(p=>stockOf(p) <= (Number(p.reorder)|| DATA.settings.lowStockDefault));
@@ -396,7 +392,7 @@ function openQuickAdd(){
     buzz();
     const f=b.dataset.add;
     if(f==="sale") saleForm();
-    else if(f==="purchase") purchaseOrderForm();
+    else if(f==="purchase") purchaseForm();
     else if(f==="expense") expenseForm();
     else if(f==="product") productForm();
   });
@@ -862,7 +858,7 @@ function saleForm(id){
    ============================================================ */
 let purFilter={q:"",from:"",to:""};
 function renderPurchases(){
-  addTopAction("➕ New Purchase","btn-primary",()=>purchaseOrderForm());
+  addTopAction("➕ New Purchase","btn-primary",()=>purchaseForm());
   addTopAction("⬇️ Export CSV","",()=>exportCSV("purchases"));
   $("#content").innerHTML = `<div class="panel">
     <div class="filters">
@@ -898,9 +894,7 @@ function purchaseForm(id){
   const p = id? DATA.purchases.find(x=>x.id===id):{date:today(),qty:1,payStatus:"Paid",shipping:0,paid:0,staff:me().name};
   buildForm([
     {name:"date",label:"Date",type:"date",value:p.date,required:true},
-    {name:"productId",label:"Product (from inventory)",type:"select",value:p.productId,placeholder:"— Select / or type below —",
-      options:DATA.products.map(pr=>({value:pr.id,label:prodLabel(pr)}))},
-    {name:"itemName",label:"Or new item name",value:p.itemName,placeholder:"Creates a new product if not selected above"},
+    {name:"itemName",label:"Item / product name",value:p.itemName||(productById(p.productId)||{}).name||"",required:true,full:true,placeholder:"e.g. 1:10 Off-road Buggy"},
     {name:"qty",label:"Quantity",type:"number",step:"1",value:p.qty,required:true},
     {name:"price",label:"Cost price (per unit)",type:"number",value:p.price,required:true},
     {name:"shipping",label:"Shipping / other cost",type:"number",value:p.shipping},
@@ -910,213 +904,27 @@ function purchaseForm(id){
     {name:"paid",label:"Amount paid",type:"number",value:p.paid},
     {name:"notes",label:"Notes",type:"textarea",value:p.notes,full:true}
   ],(o)=>{
-    if(!o.productId && !o.itemName){ toast("Pick a product or type an item name","err"); return; }
+    if(!o.itemName || !o.itemName.trim()){ toast("Enter an item name","err"); return; }
     o.qty=Number(o.qty);o.price=Number(o.price);o.shipping=Number(o.shipping)||0;o.paid=Number(o.paid)||0;
     if(!(o.qty>0)){ toast("Enter a quantity greater than 0","err"); return; }
     if(!(o.price>=0)){ toast("Enter a valid cost price","err"); return; }
+    // Purchases are independent of inventory: record-only, no product link, no stock change.
+    o.productId="";
     // reconcile paid against total based on status
     const ptot = purchaseTotal(o);
     if(o.payStatus==="Paid") o.paid=ptot;
     else if(o.payStatus==="Due") o.paid=0;
     else o.paid=Math.min(Math.max(0,o.paid), ptot);
     o.updatedAt = nowISO();
-    // create product if typed new name
-    if(!o.productId && o.itemName){
-      const np={id:nextId(),name:o.itemName,category:"",cost:o.price,price:0,stock:0,reorder:DATA.settings.lowStockDefault,supplier:o.supplier||"",updatedAt:nowISO()};
-      DATA.products.push(np); o.productId=np.id;
-    }
     if(id){
-      const old=DATA.purchases.find(x=>x.id===id);
-      const prevPid=old.productId, prevQty=Number(old.qty)||0;
-      adjustStock(prevPid, -prevQty);
-      Object.assign(old,o);
-      adjustStock(o.productId, +(Number(o.qty)||0));
-      maybeUpdateProductCost(o.productId, o.date, o.price);
+      Object.assign(DATA.purchases.find(x=>x.id===id), o);
     }else{
       o.id=nextId(); DATA.purchases.push(o);
-      adjustStock(o.productId, +(Number(o.qty)||0));
-      maybeUpdateProductCost(o.productId, o.date, o.price);
       maybeAddSupplier(o.supplier);
     }
     save();closeModal();toast("Purchase saved","ok");
     if(currentView==="purchases") drawPurchases(); else go(currentView);
   },"Save Purchase", id?"Edit Purchase":"New Purchase");
-}
-
-/* ---------- Multi-model Purchase Order ----------
-   One supplier/date, many model lines. Each line auto-creates the product in
-   inventory if new (or links to the existing one) and adds its quantity to stock.
-   Stored as one purchase record per line (sharing a poNo) so all reports,
-   dues, CSV and sync keep working unchanged. */
-function poColorRowHTML(){
-  return `<div class="po-crow">
-    <input class="po-color" list="poColorList" placeholder="Colour" autocomplete="off">
-    <input class="po-cqty" type="number" inputmode="numeric" placeholder="Qty" min="0">
-    <span class="po-camt">₹0</span>
-    <button type="button" class="icon-btn del po-cdel" title="Remove colour">✕</button>
-  </div>`;
-}
-function poLineHTML(){
-  return `<div class="po-line">
-    <div class="po-line-head">
-      <input class="po-model" list="poProdList" placeholder="Model / product name" autocomplete="off">
-      <button type="button" class="icon-btn del po-del" title="Remove model">✕</button>
-    </div>
-    <div class="po-rate-wrap">
-      <span class="po-rate-lbl">Cost ₹/unit</span>
-      <input class="po-rate" type="number" inputmode="decimal" placeholder="0" min="0">
-    </div>
-    <div class="po-colors"></div>
-    <button type="button" class="btn btn-sm po-addcolor">＋ Add colour</button>
-    <div class="po-hint"></div>
-    <div class="po-linetot"></div>
-  </div>`;
-}
-function purchaseOrderForm(){
-  const prodOpts = DATA.products.map(p=>`<option value="${esc(p.name)}">`).join("");
-  const supOpts  = DATA.suppliers.map(s=>`<option value="${esc(s.name)}">`).join("");
-  const colorOpts = [...new Set(DATA.products.map(p=>p.color).filter(Boolean))].map(c=>`<option value="${esc(c)}">`).join("");
-  const staffSel = DATA.staff.map(x=>`<option>${esc(x.name)}</option>`).join("");
-  openModal("New Purchase Order", `
-    <datalist id="poProdList">${prodOpts}</datalist>
-    <datalist id="poSupList">${supOpts}</datalist>
-    <datalist id="poColorList">${colorOpts}</datalist>
-    <div class="form-grid">
-      <div class="field"><label>Date *</label><input type="date" id="poDate" value="${today()}"></div>
-      <div class="field"><label>Supplier / bought from</label><input id="poSupplier" list="poSupList" placeholder="Type or pick"></div>
-      <div class="field"><label>Bought by</label><select id="poStaff"><option value="">Who spent</option>${staffSel}</select></div>
-      <div class="field"><label>Invoice / bill no.</label><input id="poInv" placeholder="e.g. INV-000093"></div>
-    </div>
-    <div style="margin:16px 0 8px;font-size:12px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Items / Models</div>
-    <div id="poLines"></div>
-    <button type="button" class="btn btn-sm" id="poAddLine">➕ Add another model</button>
-    <div class="form-grid" style="margin-top:16px">
-      <div class="field"><label>Other charges (shipping / packing / banking)</label><input type="number" id="poExtra" value="0" min="0"></div>
-      <div class="field"><label>Payment status</label><select id="poPay"><option>Paid</option><option>Partial</option><option>Due</option></select></div>
-      <div class="field" id="poPaidWrap" style="display:none"><label>Amount paid</label><input type="number" id="poPaid" value="0" min="0"></div>
-      <div class="field"><label>Notes</label><input id="poNotes" placeholder="Optional"></div>
-    </div>
-    <div class="po-total"><span>Grand total</span><span id="poGrand">₹0</span></div>
-    <div class="form-actions">
-      <button type="button" class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-      <button type="button" class="btn btn-primary" id="poSave">Save purchase</button>
-    </div>
-  `);
-
-  const linesEl = $("#poLines");
-  const addLine = ()=>{ linesEl.insertAdjacentHTML("beforeend", poLineHTML()); wireLine(linesEl.lastElementChild); recompute(); };
-
-  function addColorRow(line){
-    const wrap = line.querySelector(".po-colors");
-    wrap.insertAdjacentHTML("beforeend", poColorRowHTML());
-    wireColorRow(line, wrap.lastElementChild);
-    recompute();
-  }
-  function wireColorRow(line, crow){
-    crow.querySelector(".po-color").addEventListener("input", ()=>updateHint(line));
-    crow.querySelector(".po-cqty").addEventListener("input", recompute);
-    crow.querySelector(".po-cdel").onclick=()=>{
-      crow.remove();
-      if(!line.querySelector(".po-crow")) addColorRow(line); // always keep at least one
-      recompute();
-    };
-  }
-  function updateHint(line){
-    const model=line.querySelector(".po-model").value.trim();
-    const rate=line.querySelector(".po-rate");
-    const hint=line.querySelector(".po-hint");
-    if(!model){ hint.textContent=""; return; }
-    const parts=[];
-    $$(".po-crow", line).forEach(crow=>{
-      const c=crow.querySelector(".po-color").value.trim();
-      const prod=findVariant(model, c);
-      if(prod){ if(!rate.value && prod.cost) rate.value=prod.cost; parts.push(`${c||"(no colour)"}: ✓ stock ${stockOf(prod)}`); }
-      else parts.push(`${c||"(no colour)"}: ＋ new`);
-    });
-    hint.textContent = parts.join("  ·  ");
-  }
-  function wireLine(line){
-    line.querySelector(".po-model").addEventListener("input", ()=>{ updateHint(line); recompute(); });
-    line.querySelector(".po-rate").addEventListener("input", ()=>{ updateHint(line); recompute(); });
-    line.querySelector(".po-addcolor").onclick=()=>addColorRow(line);
-    line.querySelector(".po-del").onclick=()=>{ line.remove(); if(!linesEl.children.length) addLine(); recompute(); };
-    addColorRow(line); // start with one colour row
-  }
-  function recompute(){
-    let grand=0;
-    $$(".po-line", linesEl).forEach(line=>{
-      const rate=Number(line.querySelector(".po-rate").value)||0;
-      let lineTot=0;
-      $$(".po-crow", line).forEach(crow=>{
-        const q=Number(crow.querySelector(".po-cqty").value)||0;
-        crow.querySelector(".po-camt").textContent=money(q*rate);
-        lineTot+=q*rate;
-      });
-      const lt=line.querySelector(".po-linetot");
-      if(lt) lt.textContent = lineTot? ("Model total: "+money(lineTot)) : "";
-      grand+=lineTot;
-    });
-    grand += Number($("#poExtra").value)||0;
-    $("#poGrand").textContent=money(grand);
-  }
-
-  $("#poAddLine").onclick=addLine;
-  $("#poExtra").addEventListener("input", recompute);
-  $("#poPay").addEventListener("change", ()=>{ $("#poPaidWrap").style.display = $("#poPay").value==="Partial"?"":"none"; });
-  addLine();  // start with one model
-
-  $("#poSave").onclick=()=>{
-    const date=$("#poDate").value||today();
-    const supplier=$("#poSupplier").value.trim();
-    const staff=$("#poStaff").value;
-    const inv=$("#poInv").value.trim();
-    const notes=$("#poNotes").value.trim();
-    const extra=Number($("#poExtra").value)||0;
-    const payStatus=$("#poPay").value;
-    const paidInput=Number($("#poPaid").value)||0;
-
-    const lines=[];
-    $$(".po-line", linesEl).forEach(line=>{
-      const name=line.querySelector(".po-model").value.trim();
-      const rate=Number(line.querySelector(".po-rate").value)||0;
-      if(!name) return;
-      $$(".po-crow", line).forEach(crow=>{
-        const color=crow.querySelector(".po-color").value.trim();
-        const qty=Number(crow.querySelector(".po-cqty").value)||0;
-        if(qty>0) lines.push({name,color,qty,rate});
-      });
-    });
-    if(!lines.length){ toast("Add at least one model with a colour & quantity","err"); return; }
-
-    const itemsTotal=lines.reduce((s,l)=>s+l.qty*l.rate,0);
-    const grand=itemsTotal+extra;
-    const poPaid = payStatus==="Paid"?grand : payStatus==="Due"?0 : Math.min(Math.max(0,paidInput),grand);
-    const poNo = inv || ("PO-"+String((DATA.settings.purchaseSeq=(Number(DATA.settings.purchaseSeq)||0)+1)).padStart(4,"0"));
-    const ts=nowISO();
-
-    lines.forEach(l=>{
-      let prod=findVariant(l.name, l.color);
-      if(!prod){
-        prod={id:nextId(),name:l.name,color:l.color||"",category:"",cost:l.rate,price:0,stock:0,reorder:DATA.settings.lowStockDefault,supplier:supplier||"",updatedAt:ts};
-        DATA.products.push(prod);
-      }
-      const lineAmt=l.qty*l.rate;
-      const shipShare = itemsTotal>0 ? Math.round(extra*(lineAmt/itemsTotal)*100)/100 : 0;
-      const lineTotal = lineAmt+shipShare;
-      const paid = payStatus==="Paid"?lineTotal : payStatus==="Due"?0
-                 : (grand>0 ? Math.round(poPaid*(lineTotal/grand)*100)/100 : 0);
-      DATA.purchases.push({
-        id:nextId(), date, productId:prod.id, color:l.color||"", qty:l.qty, price:l.rate,
-        shipping:shipShare, supplier, staff, payStatus, paid, poNo, notes, updatedAt:ts
-      });
-      adjustStock(prod.id, +l.qty);
-      maybeUpdateProductCost(prod.id, date, l.rate);
-    });
-    maybeAddSupplier(supplier);
-    save(); closeModal();
-    toast(`${lines.length} colour-variant(s) added to purchases & inventory`,"ok");
-    if(currentView==="purchases") drawPurchases(); else go(currentView);
-  };
 }
 
 /* ============================================================
@@ -1237,15 +1045,6 @@ function productForm(id){
 function adjustStock(productId, delta){
   const p=productById(productId);
   if(p){ p.stock=(Number(p.stock)||0)+delta; p.updatedAt=nowISO(); }
-}
-// Only let the MOST RECENT purchase set the product's current cost, so
-// correcting an old purchase doesn't clobber today's inventory cost.
-function maybeUpdateProductCost(productId, date, price){
-  const pr=productById(productId); if(!pr) return;
-  const latest=DATA.purchases
-    .filter(x=>x.productId===productId)
-    .reduce((acc,x)=> (!acc || (x.date||"")>=(acc.date||"")) ? x : acc, null);
-  if(!latest || (date||"")>=(latest.date||"")){ pr.cost=Number(price)||0; pr.updatedAt=nowISO(); }
 }
 
 /* ---------- Invoice / bill ---------- */
@@ -1670,7 +1469,7 @@ window.deleteRow=(type,id)=>{
   }
   if(!confirm("Delete this entry? This cannot be undone.")) return;
   if(type==="sale"){ const s=DATA.sales.find(x=>x.id===id); if(s) adjustStock(s.productId,+Number(s.qty)||0); DATA.sales=DATA.sales.filter(x=>x.id!==id); }
-  else if(type==="purchase"){ const p=DATA.purchases.find(x=>x.id===id); if(p) adjustStock(p.productId,-(Number(p.qty)||0)); DATA.purchases=DATA.purchases.filter(x=>x.id!==id); }
+  else if(type==="purchase"){ DATA.purchases=DATA.purchases.filter(x=>x.id!==id); }  // purchases don't touch stock
   else if(type==="expense"){ DATA.expenses=DATA.expenses.filter(x=>x.id!==id); }
   else if(type==="customers"){ DATA.customers=DATA.customers.filter(x=>x.id!==id); }
   else if(type==="suppliers"){ DATA.suppliers=DATA.suppliers.filter(x=>x.id!==id); }

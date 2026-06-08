@@ -311,21 +311,6 @@ td.num,th.num{ text-align:right }
   .bottomnav,.fab{ display:none !important }
 }
 
-/* ---------- Multi-model Purchase Order ---------- */
-.po-line{ border:1px solid var(--line); border-radius:12px; padding:10px; margin-bottom:8px; background:var(--surface-2) }
-.po-line .po-model{ width:100%; margin-bottom:6px; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:11px 12px; color:var(--text); font-size:16px }
-.po-row2{ display:flex; gap:6px; align-items:center }
-.po-row2 input{ background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:10px 8px; color:var(--text); font-size:16px; min-width:0 }
-.po-row2 .po-qty{ width:62px; flex:0 0 auto } .po-row2 .po-rate{ width:92px; flex:0 0 auto }
-.po-amt{ flex:1; text-align:right; font-weight:800; font-size:13px; white-space:nowrap }
-.po-del{ flex:0 0 auto }
-.po-hint{ font-size:11px; margin:5px 2px 0; min-height:13px; font-weight:600 }
-.po-hint.new{ color:var(--primary-dark) } .dark .po-hint.new{ color:var(--amber) }
-.po-hint.exist{ color:var(--green) }
-.po-total{ display:flex; justify-content:space-between; align-items:center; margin-top:16px; padding:14px 16px;
-  background:var(--surface-2); border:1px solid var(--line); border-radius:14px; font-weight:700 }
-.po-total #poGrand{ font-size:20px; font-weight:800; color:var(--primary-dark) } .dark .po-total #poGrand{ color:var(--amber) }
-
 /* ---------- Dashboard KPI detail ---------- */
 .kpi-click{ cursor:pointer }
 .kpi-click:active{ transform:scale(.98) }
@@ -336,22 +321,3 @@ td.num,th.num{ text-align:right }
 .kpi-detail-list{ display:flex; flex-direction:column }
 .kpi-di{ display:flex; justify-content:space-between; align-items:center; gap:10px; padding:11px 4px; border-bottom:1px solid var(--line-soft) }
 .kpi-di[role="button"]{ cursor:pointer } .kpi-di[role="button"]:active{ background:var(--surface-2) }
-
-/* Purchase Order — colour input (full width, above qty/rate row) */
-.po-line .po-color{ width:100%; margin:6px 0; background:var(--surface); border:1px solid var(--line);
-  border-radius:10px; padding:10px 12px; color:var(--text); font-size:16px }
-
-/* ---------- Purchase Order: model → multiple colour rows ---------- */
-.po-line-head{ display:flex; gap:6px; align-items:center }
-.po-line-head .po-model{ flex:1; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:11px 12px; color:var(--text); font-size:16px; min-width:0 }
-.po-rate-wrap{ display:flex; align-items:center; gap:8px; margin:8px 0 4px }
-.po-rate-lbl{ font-size:12px; color:var(--muted); font-weight:700; white-space:nowrap }
-.po-rate-wrap .po-rate{ flex:1; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:9px 12px; color:var(--text); font-size:16px; min-width:0 }
-.po-colors{ display:flex; flex-direction:column; gap:6px; margin:6px 0 }
-.po-crow{ display:flex; gap:6px; align-items:center }
-.po-crow .po-color{ flex:1; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:9px 10px; color:var(--text); font-size:16px; min-width:0 }
-.po-crow .po-cqty{ width:64px; flex:0 0 auto; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:9px 8px; color:var(--text); font-size:16px }
-.po-crow .po-camt{ width:84px; flex:0 0 auto; text-align:right; font-weight:800; font-size:13px; white-space:nowrap }
-.po-addcolor{ margin-top:2px }
-.po-linetot{ font-size:12px; font-weight:800; color:var(--primary-dark); text-align:right; margin-top:6px; min-height:14px }
-.dark .po-linetot{ color:var(--amber) }
