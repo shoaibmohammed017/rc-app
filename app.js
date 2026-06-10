@@ -883,26 +883,89 @@ function renderPurchases(){
   ["pQ","pFrom","pTo"].forEach(id=>$("#"+id).oninput=apply);
   drawPurchases();
 }
+// Group purchase line-records into one purchase order each (shared poNo = same order;
+// a record without a poNo is its own single-item order).
+function purchaseGroups(rows){
+  const map=new Map();
+  rows.forEach(p=>{
+    const key = p.poNo ? ("po:"+p.poNo) : ("id:"+p.id);
+    if(!map.has(key)) map.set(key,{key, poNo:p.poNo||"", supplier:p.supplier||"", staff:p.staff||"", lines:[]});
+    map.get(key).lines.push(p);
+  });
+  return [...map.values()].map(g=>{
+    g.qty   = g.lines.reduce((s,l)=>s+(Number(l.qty)||0),0);
+    g.total = g.lines.reduce((s,l)=>s+purchaseTotal(l),0);
+    g.paid  = g.lines.reduce((s,l)=>s+(Number(l.paid)||0),0);
+    g.date  = g.lines.reduce((d,l)=> (l.date||"")>d ? (l.date||"") : d, "");
+    const allSame = g.lines.every(l=>(l.payStatus||"")===(g.lines[0].payStatus||""));
+    g.payStatus = allSame ? (g.lines[0].payStatus||"") : "Mixed";
+    return g;
+  });
+}
 function drawPurchases(){
   let rows = rangeFilter(DATA.purchases, purFilter.from, purFilter.to);
-  if(purFilter.q){ const q=purFilter.q; rows=rows.filter(p=>{
-    const name=(p.itemName||"").toLowerCase();
-    return name.includes(q)||(p.supplier||"").toLowerCase().includes(q)||(p.staff||"").toLowerCase().includes(q);});}
-  rows.sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+  if(purFilter.q){ const q=purFilter.q; rows=rows.filter(p=>
+    (p.itemName||"").toLowerCase().includes(q)||(p.supplier||"").toLowerCase().includes(q)||(p.staff||"").toLowerCase().includes(q)); }
+  let groups = purchaseGroups(rows);
+  groups.sort((a,b)=>(b.date||"").localeCompare(a.date||""));
   const cols=[
-    {label:"Date",render:p=>fmtDate(p.date)},
-    {label:"Product",render:p=>esc(p.itemName||"—")},
-    {label:"Qty",num:true,render:p=>num(p.qty)},
-    {label:"Cost/unit",num:true,render:p=>money(p.price)},
-    {label:"Shipping",num:true,render:p=>money(p.shipping)},
-    {label:"Total",num:true,render:p=>`<strong>${money(purchaseTotal(p))}</strong>`},
-    {label:"Supplier",render:p=>esc(p.supplier||"—")},
-    {label:"Bought by",render:p=>esc(p.staff||"—")},
-    {label:"Payment",render:p=>payBadge(p.payStatus)},
-    {label:"",render:p=>rowActions("purchase",p.id)}
+    {label:"Date",render:g=>fmtDate(g.date)},
+    {label:"Purchase",render:g=>`<strong>${esc(g.lines[0].itemName||"—")}</strong>${g.lines.length>1?` <span class="muted-sm">+${g.lines.length-1} more</span>`:""}`},
+    {label:"Items",num:true,render:g=>num(g.lines.length)},
+    {label:"Qty",num:true,render:g=>num(g.qty)},
+    {label:"Total",num:true,render:g=>`<strong>${money(g.total)}</strong>`},
+    {label:"Supplier",render:g=>esc(g.supplier||"—")},
+    {label:"Bought by",render:g=>esc(g.staff||"—")},
+    {label:"Payment",render:g=>g.payStatus==="Mixed"?`<span class="badge">Mixed</span>`:payBadge(g.payStatus)},
+    {label:"",render:g=>`<div class="row-actions">
+      <button class="icon-btn" onclick="openPurchaseGroup('${encodeURIComponent(g.key)}')" title="View details">👁️</button>
+      <button class="icon-btn del" onclick="deletePurchaseGroup('${encodeURIComponent(g.key)}')" title="Delete purchase">🗑️</button></div>`}
   ];
-  $("#purTable").innerHTML = tableHTML(cols,rows);
+  $("#purTable").innerHTML = tableHTML(cols,groups);
 }
+// One purchase order → modal listing all its items.
+window.openPurchaseGroup=(encKey)=>{
+  const key=decodeURIComponent(encKey);
+  const g=purchaseGroups(DATA.purchases).find(x=>x.key===key);
+  if(!g){ toast("Purchase not found","err"); return; }
+  const lines=[...g.lines].sort((a,b)=>(a.itemName||"").localeCompare(b.itemName||""));
+  const body=lines.map(l=>`<tr>
+    <td>${esc(l.itemName||"—")}${l.color?`<span class="muted-sm"> · ${esc(l.color)}</span>`:""}</td>
+    <td class="num">${num(l.qty)}</td>
+    <td class="num">${money(l.price)}</td>
+    <td class="num">${money(purchaseTotal(l))}</td>
+    <td class="num"><button class="icon-btn" onclick="closeModal();editRow('purchase','${l.id}')" title="Edit item">✏️</button>
+      <button class="icon-btn del" onclick="delPurchaseLine('${l.id}','${encodeURIComponent(key)}')" title="Remove item">🗑️</button></td></tr>`).join("");
+  openModal(`Purchase · ${esc(g.supplier||"Supplier")}`,`
+    <div class="detail-meta">
+      <div><span>Date</span><b>${fmtDate(g.date)}</b></div>
+      <div><span>Supplier</span><b>${esc(g.supplier||"—")}</b></div>
+      <div><span>Invoice / PO</span><b>${esc(g.poNo||"—")}</b></div>
+      <div><span>Bought by</span><b>${esc(g.staff||"—")}</b></div>
+      <div><span>Payment</span><b>${esc(g.payStatus||"—")}</b></div>
+    </div>
+    <table class="detail-table"><thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Cost/unit</th><th class="num">Total</th><th></th></tr></thead>
+    <tbody>${body}</tbody></table>
+    <div class="detail-total"><span>Grand total · ${g.lines.length} item${g.lines.length>1?"s":""} · ${num(g.qty)} pcs</span><strong>${money(g.total)}</strong></div>
+    <div class="form-actions"><button class="btn btn-ghost" onclick="closeModal()">Close</button></div>`);
+};
+window.delPurchaseLine=(id,encKey)=>{
+  if(!confirm("Remove this item from the purchase?")) return;
+  DATA.purchases=DATA.purchases.filter(x=>x.id!==id); tomb(id);
+  save();
+  const remain=purchaseGroups(DATA.purchases).find(x=>x.key===decodeURIComponent(encKey));
+  if(remain) openPurchaseGroup(encKey); else closeModal();
+  if(currentView==="purchases") drawPurchases();
+};
+window.deletePurchaseGroup=(encKey)=>{
+  const g=purchaseGroups(DATA.purchases).find(x=>x.key===decodeURIComponent(encKey));
+  if(!g) return;
+  if(!confirm(`Delete this entire purchase (${g.lines.length} item${g.lines.length>1?"s":""}) from ${g.supplier||"supplier"}? This cannot be undone.`)) return;
+  const ids=new Set(g.lines.map(l=>l.id));
+  DATA.purchases=DATA.purchases.filter(x=>!ids.has(x.id));
+  g.lines.forEach(l=>tomb(l.id));
+  save(); closeModal(); toast("Purchase deleted"); if(currentView==="purchases") drawPurchases();
+};
 function purchaseForm(id){
   const p = id? DATA.purchases.find(x=>x.id===id):{date:today(),qty:1,payStatus:"Paid",shipping:0,paid:0,staff:me().name};
   buildForm([
@@ -1011,31 +1074,84 @@ function renderInventory(){
   ["iQ","iCat"].forEach(id=>$("#"+id).oninput=apply);
   drawInventory();
 }
+// Group products that share a name into one item; each colour is a variant under it.
+function productGroups(rows){
+  const map=new Map();
+  rows.forEach(p=>{
+    const key=((p.name||"").trim().toLowerCase())||("id:"+p.id);
+    if(!map.has(key)) map.set(key,{key, name:p.name||"—", category:p.category||"", variants:[]});
+    map.get(key).variants.push(p);
+  });
+  return [...map.values()].map(g=>{
+    g.stock = g.variants.reduce((s,v)=>s+stockOf(v),0);
+    g.value = g.variants.reduce((s,v)=>s+Math.max(0,stockOf(v))*(Number(v.cost)||0),0);
+    g.reorder = Number(g.variants[0].reorder)||DATA.settings.lowStockDefault;
+    return g;
+  });
+}
 function drawInventory(){
   let rows=[...DATA.products];
   if(invFilter.cat) rows=rows.filter(p=>p.category===invFilter.cat);
   if(invFilter.q){const q=invFilter.q;rows=rows.filter(p=>(p.name||"").toLowerCase().includes(q)||(p.sku||"").toLowerCase().includes(q)||(p.color||"").toLowerCase().includes(q));}
-  rows.sort((a,b)=>(a.name||"").localeCompare(b.name||""));
+  let groups=productGroups(rows);
+  groups.sort((a,b)=>(a.name||"").localeCompare(b.name||""));
   const cols=[
-    {label:"Product",render:p=>`<strong>${esc(p.name)}</strong>`},
-    {label:"Category",render:p=>esc(p.category||"—")},
-    {label:"Colour",render:p=>esc(p.color||"—")},
-    {label:"SKU",render:p=>esc(p.sku||"—")},
-    {label:"Stock",num:true,render:p=>{
-      const low=stockOf(p)<=(Number(p.reorder)||DATA.settings.lowStockDefault);
-      return `<span class="badge ${low?"low":"ok"}">${num(stockOf(p))}</span>`;}},
-    {label:"Cost",num:true,render:p=>money(p.cost)},
-    {label:"Sell price",num:true,render:p=>money(p.price)},
-    {label:"Margin",num:true,render:p=>{const m=(Number(p.price)||0)-(Number(p.cost)||0);return `<span class="${m>=0?"pos":"neg"}">${money(m)}</span>`;}},
-    {label:"Stock value",num:true,render:p=>money(stockOf(p)*(Number(p.cost)||0))},
-    {label:"Supplier",render:p=>esc(p.supplier||"—")},
-    {label:"",render:p=>rowActions("product",p.id)}
+    {label:"Product",render:g=>`<strong>${esc(g.name)}</strong>`},
+    {label:"Category",render:g=>esc(g.category||"—")},
+    {label:"Colours",render:g=>g.variants.length>1?`<span class="badge">${num(g.variants.length)} colours</span>`:esc((g.variants[0].color)||"—")},
+    {label:"In stock",num:true,render:g=>`<span class="badge ${g.stock<=g.reorder?"low":"ok"}">${num(g.stock)}</span>`},
+    {label:"Stock value",num:true,render:g=>money(g.value)},
+    {label:"",render:g=>`<div class="row-actions"><button class="icon-btn" onclick="openProductGroup('${encodeURIComponent(g.key)}')" title="View colours & stock">👁️</button></div>`}
   ];
   const totVal=stockValue();
-  $("#invTable").innerHTML=`<div style="margin-bottom:12px;color:var(--muted);font-size:13px">Total stock value: <strong style="color:var(--text)">${money(totVal)}</strong></div>`+tableHTML(cols,rows);
+  $("#invTable").innerHTML=`<div style="margin-bottom:12px;color:var(--muted);font-size:13px">Total stock value: <strong style="color:var(--text)">${money(totVal)}</strong></div>`+tableHTML(cols,groups);
 }
-function productForm(id){
-  const p=id?productById(id):{stock:0,reorder:DATA.settings.lowStockDefault};
+// One product name → modal showing each colour's pieces, cost, sell price and value.
+window.openProductGroup=(encKey)=>{
+  const key=decodeURIComponent(encKey);
+  const g=productGroups(DATA.products).find(x=>x.key===key);
+  if(!g){ toast("Product not found","err"); return; }
+  const vs=[...g.variants].sort((a,b)=>(a.color||"").localeCompare(b.color||""));
+  const body=vs.map(v=>{
+    const low=stockOf(v)<=(Number(v.reorder)||DATA.settings.lowStockDefault);
+    const m=(Number(v.price)||0)-(Number(v.cost)||0);
+    return `<tr>
+      <td>${esc(v.color||"—")}</td>
+      <td class="num"><span class="badge ${low?"low":"ok"}">${num(stockOf(v))}</span></td>
+      <td class="num">${money(v.cost)}</td>
+      <td class="num">${money(v.price)}</td>
+      <td class="num"><span class="${m>=0?"pos":"neg"}">${money(m)}</span></td>
+      <td class="num"><button class="icon-btn" onclick="closeModal();editRow('product','${v.id}')" title="Edit">✏️</button>
+        <button class="icon-btn del" onclick="delProductVariant('${v.id}','${encodeURIComponent(key)}')" title="Delete colour">🗑️</button></td></tr>`;
+  }).join("");
+  openModal(esc(g.name),`
+    <div class="detail-meta">
+      <div><span>Colours</span><b>${num(g.variants.length)}</b></div>
+      <div><span>Total pieces</span><b>${num(g.stock)}</b></div>
+      <div><span>Stock value</span><b>${money(g.value)}</b></div>
+    </div>
+    <table class="detail-table"><thead><tr><th>Colour</th><th class="num">Pieces</th><th class="num">Cost</th><th class="num">Sell</th><th class="num">Margin</th><th></th></tr></thead>
+    <tbody>${body}</tbody></table>
+    <div class="form-actions">
+      <button class="btn btn-ghost" onclick="closeModal()">Close</button>
+      <button class="btn btn-primary" onclick="closeModal();addColour('${encodeURIComponent(g.name)}')">＋ Add colour</button>
+    </div>`);
+};
+window.addColour=(encName)=>{ productForm(null,{name:decodeURIComponent(encName)}); };
+window.delProductVariant=(id,encKey)=>{
+  const p=DATA.products.find(x=>x.id===id); if(!p) return;
+  const used=DATA.sales.filter(s=>s.productId===id).length;
+  if(used && !confirm(`This colour is used in ${used} sale(s). Delete it? Those sales keep the name but lose the inventory link.`)) return;
+  if(!used && !confirm("Delete this colour variant?")) return;
+  DATA.sales.forEach(s=>{ if(s.productId===id && !s.itemName){ s.itemName=p.name; s.updatedAt=nowISO(); } });
+  DATA.products=DATA.products.filter(x=>x.id!==id); tomb(id);
+  save();
+  const remain=productGroups(DATA.products).find(x=>x.key===decodeURIComponent(encKey));
+  if(remain) openProductGroup(encKey); else closeModal();
+  if(currentView==="inventory") drawInventory();
+};
+function productForm(id, preset){
+  const p=id?productById(id):Object.assign({stock:0,reorder:DATA.settings.lowStockDefault}, preset||{});
   buildForm([
     {name:"name",label:"Product name",value:p.name,required:true,full:true,placeholder:"e.g. 1:10 Off-road Buggy"},
     {name:"category",label:"Category",type:"select",value:p.category,options:DATA.settings.productCategories,placeholder:"Select",addable:"productCategories"},
