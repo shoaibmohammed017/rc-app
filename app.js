@@ -60,6 +60,14 @@ function normalize(d){
       if(p) s.costAtSale = Number(p.cost)||0;
     }
   });
+  // Purchases are INDEPENDENT of inventory: snapshot the (once-linked) product name onto each
+  // purchase so it is self-contained and never changes when an inventory item is edited/deleted.
+  out.purchases.forEach(pp=>{
+    if((pp.itemName==null || pp.itemName==="") && pp.productId){
+      const pr=out.products.find(x=>x.id===pp.productId);
+      if(pr) pp.itemName = pr.name;
+    }
+  });
   return out;
 }
 let DATA = load();
@@ -721,7 +729,7 @@ window.openKpiDetail=(key)=>{
       + statRow("Unpaid purchases", num(due.length))
       + sec("By supplier") + (bySup.length?bySup.map(([n,v])=>statRow(n,money(v))).join(""):emptyLine())
       + sec("Unpaid purchases")
-      + kpiList(due.map(p=>({main:esc(p.supplier||"Supplier")+" — "+esc((productById(p.productId)||{}).name||p.itemName||"Item"), sub:fmtDate(p.date)+" · "+esc(p.payStatus||""), val:money(purchaseDue(p)), cls:"neg", go:"purchases"})), "Nothing owed 🎉");
+      + kpiList(due.map(p=>({main:esc(p.supplier||"Supplier")+" — "+esc(p.itemName||"Item"), sub:fmtDate(p.date)+" · "+esc(p.payStatus||""), val:money(purchaseDue(p)), cls:"neg", go:"purchases"})), "Nothing owed 🎉");
   }
   else if(key==="month"){
     title="This Month — "+new Date().toLocaleDateString("en-IN",{month:"long",year:"numeric"});
@@ -878,12 +886,12 @@ function renderPurchases(){
 function drawPurchases(){
   let rows = rangeFilter(DATA.purchases, purFilter.from, purFilter.to);
   if(purFilter.q){ const q=purFilter.q; rows=rows.filter(p=>{
-    const name=((productById(p.productId)||{}).name||p.itemName||"").toLowerCase();
+    const name=(p.itemName||"").toLowerCase();
     return name.includes(q)||(p.supplier||"").toLowerCase().includes(q)||(p.staff||"").toLowerCase().includes(q);});}
   rows.sort((a,b)=>(b.date||"").localeCompare(a.date||""));
   const cols=[
     {label:"Date",render:p=>fmtDate(p.date)},
-    {label:"Product",render:p=>esc(prodLabel(productById(p.productId))||p.itemName||"—")},
+    {label:"Product",render:p=>esc(p.itemName||"—")},
     {label:"Qty",num:true,render:p=>num(p.qty)},
     {label:"Cost/unit",num:true,render:p=>money(p.price)},
     {label:"Shipping",num:true,render:p=>money(p.shipping)},
@@ -899,7 +907,7 @@ function purchaseForm(id){
   const p = id? DATA.purchases.find(x=>x.id===id):{date:today(),qty:1,payStatus:"Paid",shipping:0,paid:0,staff:me().name};
   buildForm([
     {name:"date",label:"Date",type:"date",value:p.date,required:true},
-    {name:"itemName",label:"Item / product name",value:p.itemName||(productById(p.productId)||{}).name||"",required:true,full:true,placeholder:"e.g. 1:10 Off-road Buggy"},
+    {name:"itemName",label:"Item / product name",value:p.itemName||"",required:true,full:true,placeholder:"e.g. 1:10 Off-road Buggy"},
     {name:"qty",label:"Quantity",type:"number",step:"1",value:p.qty,required:true},
     {name:"price",label:"Cost price (per unit)",type:"number",value:p.price,required:true},
     {name:"shipping",label:"Shipping / other cost",type:"number",value:p.shipping},
@@ -1459,15 +1467,14 @@ window.editRow=(type,id)=>{
 function tomb(id){ if(!DATA.tombstones) DATA.tombstones={}; DATA.tombstones[id]=nowISO(); }
 window.deleteRow=(type,id)=>{
   if(type==="product"){
-    // don't orphan history: snapshot the name onto referencing rows, block if in use is too strict,
-    // so we keep records readable by copying the product name into itemName.
+    // Inventory is SEPARATE from Purchases — deleting a product never touches purchases.
+    // Sales stay linked (they reduce stock), so snapshot the name onto sales only.
     const p=DATA.products.find(x=>x.id===id);
-    const used=DATA.sales.filter(s=>s.productId===id).length + DATA.purchases.filter(pp=>pp.productId===id).length;
-    if(used && !confirm(`This product is used in ${used} record(s). Delete it? Those records will keep the name but lose the inventory link.`)) return;
+    const used=DATA.sales.filter(s=>s.productId===id).length;
+    if(used && !confirm(`This product is used in ${used} sale(s). Delete it? Those sales keep the name but lose the inventory link.`)) return;
     if(!used && !confirm("Delete this product?")) return;
     if(p){
       DATA.sales.forEach(s=>{ if(s.productId===id && !s.itemName){ s.itemName=p.name; s.updatedAt=nowISO(); } });
-      DATA.purchases.forEach(pp=>{ if(pp.productId===id && !pp.itemName){ pp.itemName=p.name; pp.updatedAt=nowISO(); } });
     }
     DATA.products=DATA.products.filter(x=>x.id!==id); tomb(id);
     save();toast("Deleted");go(currentView); return;
@@ -1527,7 +1534,7 @@ function exportCSV(kind){
     rows=DATA.sales.map(s=>[s.date,(productById(s.productId)||{}).name||s.itemName||"",s.qty,s.price,s.discount,saleTotal(s),saleProfit(s),s.channel,s.customer,s.staff,s.payStatus,s.paid,s.notes]);
   }else if(kind==="purchases"){
     head=["Date","Product","Qty","Cost/unit","Shipping","Total","Supplier","Bought by","Payment","Paid","Notes"];
-    rows=DATA.purchases.map(p=>[p.date,(productById(p.productId)||{}).name||p.itemName||"",p.qty,p.price,p.shipping,purchaseTotal(p),p.supplier,p.staff,p.payStatus,p.paid,p.notes]);
+    rows=DATA.purchases.map(p=>[p.date,p.itemName||"",p.qty,p.price,p.shipping,purchaseTotal(p),p.supplier,p.staff,p.payStatus,p.paid,p.notes]);
   }else if(kind==="expenses"){
     head=["Date","Category","Amount","Paid by","Mode","Notes"];
     rows=DATA.expenses.map(e=>[e.date,e.category,e.amount,e.staff,e.mode,e.notes]);
