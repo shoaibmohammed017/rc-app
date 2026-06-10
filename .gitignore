@@ -14,3 +14,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Throwaway local scripts / dumps / backups — never commit (e.g. _probe.txt, _clear_inventory.mjs, _backup_*.json)
+_*
