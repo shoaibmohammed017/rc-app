@@ -1106,7 +1106,9 @@ function drawInventory(){
     {label:"Colours",render:g=>g.variants.length>1?`<span class="badge">${num(g.variants.length)} colours</span>`:esc((g.variants[0].color)||"—")},
     {label:"In stock",num:true,render:g=>`<span class="badge ${g.stock<=g.reorder?"low":"ok"}">${num(g.stock)}</span>`},
     {label:"Stock value",num:true,render:g=>money(g.value)},
-    {label:"",render:g=>`<div class="row-actions"><button class="icon-btn" onclick="openProductGroup('${encodeURIComponent(g.key)}')" title="View colours & stock">👁️</button></div>`}
+    {label:"",render:g=>`<div class="row-actions">
+      <button class="icon-btn" onclick="openProductGroup('${encodeURIComponent(g.key)}')" title="View colours & stock">👁️</button>
+      <button class="icon-btn del" onclick="deleteProductGroup('${encodeURIComponent(g.key)}')" title="Delete from inventory">🗑️</button></div>`}
   ];
   const totVal=stockValue();
   $("#invTable").innerHTML=`<div style="margin-bottom:12px;color:var(--muted);font-size:13px">Total stock value: <strong style="color:var(--text)">${money(totVal)}</strong></div>`+tableHTML(cols,groups);
@@ -1145,6 +1147,20 @@ window.openProductGroup=(encKey)=>{
     </div>`);
 };
 window.addColour=(encName)=>{ productForm(null,{name:decodeURIComponent(encName)}); };
+// Delete a whole product (all its colour variants) straight from the Inventory list.
+window.deleteProductGroup=(encKey)=>{
+  const key=decodeURIComponent(encKey);
+  const g=productGroups(DATA.products).find(x=>x.key===key);
+  if(!g) return;
+  const n=g.variants.length;
+  if(!confirm(`Delete "${g.name}"${n>1?` and all ${n} colours`:""}? This removes ${n>1?"them":"it"} from inventory.`)) return;
+  const ids=new Set(g.variants.map(v=>v.id));
+  // keep sales readable: snapshot the product name onto any linked sales before unlinking
+  DATA.sales.forEach(s=>{ if(ids.has(s.productId) && !s.itemName){ const v=g.variants.find(x=>x.id===s.productId); if(v) s.itemName=v.name; s.updatedAt=nowISO(); } });
+  DATA.products=DATA.products.filter(x=>!ids.has(x.id));
+  g.variants.forEach(v=>tomb(v.id));
+  save(); toast(`Deleted ${n} item(s)`); if(currentView==="inventory") drawInventory();
+};
 window.delProductVariant=(id,encKey)=>{
   const p=DATA.products.find(x=>x.id===id); if(!p) return;
   const used=DATA.sales.filter(s=>s.productId===id).length;
