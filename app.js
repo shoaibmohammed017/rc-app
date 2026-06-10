@@ -685,12 +685,12 @@ window.openKpiDetail=(key)=>{
       + kpiList(recent.map(s=>({main:esc((productById(s.productId)||{}).name||s.itemName||"Item")+" ×"+num(s.qty), sub:fmtDate(s.date)+" · "+esc(s.customer||"Walk-in"), val:money(saleTotal(s)), cls:"pos"})), "No sales yet");
   }
   else if(key==="netprofit" || key==="grossprofit"){
-    const rev=sumBy(sales,saleTotal), cogs=sumBy(sales,saleCost), gross=rev-cogs, exp=sumBy(expenses,e=>e.amount), net=gross-exp;
+    const rev=sumBy(sales,saleTotal), cogs=sumBy(sales,saleCost), gross=rev-cogs, exp=sumBy(expenses,e=>e.amount), sExp=sumBy(sales,s=>Number(s.saleExpense)||0), net=gross-exp-sExp;
     title = key==="netprofit"?"Net Profit":"Gross Profit";
     body = statRow("Revenue", money(rev))
       + statRow("− Cost of goods sold", money(cogs))
       + statRow("= Gross profit", money(gross), true)
-      + (key==="netprofit"? statRow("− Operating expenses", money(exp)) + statRow("= Net profit", money(net), true) : "")
+      + (key==="netprofit"? statRow("− Operating expenses", money(exp)) + (sExp? statRow("− Per-sale expenses", money(sExp)):"") + statRow("= Net profit", money(net), true) : "")
       + statRow("Profit margin", (rev? ((key==="netprofit"?net:gross)/rev*100).toFixed(1):0)+"%")
       + sec("Most profitable products")
       + (()=>{ const g=groupSum(sales, s=>(productById(s.productId)||{}).name||s.itemName||"Item", saleProfit); return g.length?g.slice(0,8).map(([n,v])=>statRow(n,money(v))).join(""):emptyLine(); })();
@@ -1129,8 +1129,10 @@ window.openProductGroup=(encKey)=>{
       <td class="num"><button class="icon-btn" onclick="closeModal();editRow('product','${v.id}')" title="Edit">✏️</button>
         <button class="icon-btn del" onclick="delProductVariant('${v.id}','${encodeURIComponent(key)}')" title="Delete colour">🗑️</button></td></tr>`;
   }).join("");
+  const brand=(g.variants.find(v=>v.brand)||{}).brand||"";
   openModal(esc(g.name),`
     <div class="detail-meta">
+      ${brand?`<div><span>Brand</span><b>${esc(brand)}</b></div>`:""}
       <div><span>Colours</span><b>${num(g.variants.length)}</b></div>
       <div><span>Total pieces</span><b>${num(g.stock)}</b></div>
       <div><span>Stock value</span><b>${money(g.value)}</b></div>
@@ -1360,7 +1362,8 @@ function drawReport(){
   const cogs=sumBy(sales,saleCost);
   const gross=revenue-cogs;
   const exp=sumBy(expenses,e=>e.amount);
-  const net=gross-exp;
+  const saleExp=sumBy(sales,s=>Number(s.saleExpense)||0);
+  const net=gross-exp-saleExp;
   const purTotal=sumBy(purchases,purchaseTotal);
 
   // expense breakdown
@@ -1862,13 +1865,22 @@ function drawApprovals(){
       </div></div>`;
   }).join("");
 }
-window.approveItem=(id)=>{
-  const a=(DATA.approvals||[]).find(x=>x.id===id); if(!a||a.status!=="pending") return;
-  const name=[a.brand,a.model].filter(s=>(s||"").trim()).map(s=>s.trim()).join(" ")||(a.model||"Item");
+window.approveItem=async (id)=>{
+  let a=(DATA.approvals||[]).find(x=>x.id===id); if(!a||a.status!=="pending") return;
+  // Pull the latest first so a concurrent approval on another device can't be lost; re-check after merge.
+  if(CLOUD){ try{ await fetchCloud(); }catch(_){} }
+  a=(DATA.approvals||[]).find(x=>x.id===id);
+  if(!a||a.status!=="pending"){ toast("Already handled on another device"); drawApprovals(); return; }
+  const costStr=prompt(`Cost price per unit for "${[a.brand,a.model].filter(Boolean).join(" ")||a.model}" (leave blank if unknown):`, "");
+  if(costStr===null) return;                 // cancelled — leave pending
+  const cost=Number(costStr)||0;
+  // Match/create on MODEL + COLOUR (brand kept as a separate field) so staff approvals
+  // and owner-entered products converge instead of splitting into duplicate rows.
+  const name=(a.model||"Item").trim();
   const colour=(a.colour||"").trim();
   let p=DATA.products.find(x=>(x.name||"").toLowerCase()===name.toLowerCase() && (x.color||"").toLowerCase()===colour.toLowerCase());
-  if(p){ p.stock=(Number(p.stock)||0)+(Number(a.qty)||0); if(Number(a.price)>0) p.price=Number(a.price); p.updatedAt=nowISO(); }
-  else { p={id:nextId(),name,brand:(a.brand||"").trim(),color:colour,category:"",sku:"",cost:0,price:Number(a.price)||0,stock:Number(a.qty)||0,reorder:DATA.settings.lowStockDefault,supplier:"",updatedAt:nowISO()}; DATA.products.push(p); }
+  if(p){ p.stock=(Number(p.stock)||0)+(Number(a.qty)||0); if(Number(a.price)>0) p.price=Number(a.price); if(cost>0) p.cost=cost; if(a.brand && !p.brand) p.brand=(a.brand||"").trim(); p.updatedAt=nowISO(); }
+  else { p={id:nextId(),name,brand:(a.brand||"").trim(),color:colour,category:"",sku:"",cost,price:Number(a.price)||0,stock:Number(a.qty)||0,reorder:DATA.settings.lowStockDefault,supplier:"",updatedAt:nowISO()}; DATA.products.push(p); }
   a.status="approved"; a.updatedAt=nowISO(); save();
   toast("Approved — added to inventory","ok"); drawApprovals();
 };
