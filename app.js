@@ -20,7 +20,7 @@ function defaultData(){
       saleChannels:["Shop / Walk-in","WhatsApp","Instagram","Amazon","Flipkart","Exhibition","Other"],
       productCategories:["RC Car","RC Truck","RC Drone","Battery","Charger","Spare Part","Tyres","Remote","Accessory"]
     },
-    products:[], purchases:[], sales:[], expenses:[],
+    products:[], purchases:[], sales:[], expenses:[], approvals:[],
     customers:[], suppliers:[], staff:[],
     users:[{id:"u_admin",username:"admin",password:"admin",name:"Owner",role:"admin"}],
     seq:1
@@ -45,7 +45,7 @@ let sb = null;
 if (CLOUD) { try { sb = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_KEY); } catch(e){ console.warn("Supabase init failed", e); } }
 
 /* ---------- Storage ---------- */
-const COLLECTIONS = ["products","sales","purchases","expenses","customers","suppliers","staff","users"];
+const COLLECTIONS = ["products","sales","purchases","expenses","customers","suppliers","staff","users","approvals"];
 function normalize(d){
   // deep-merge over defaults so older/partial data never has missing arrays/sub-keys
   const def = defaultData();
@@ -280,7 +280,7 @@ function saleCost(s){
   const c = hasSnap ? (Number(s.costAtSale)||0) : (p ? Number(p.cost)||0 : 0);
   return (Number(s.qty)||0)*c;
 }
-function saleProfit(s){ return saleTaxable(s) - saleCost(s); }
+function saleProfit(s){ return saleTaxable(s) - saleCost(s) - (Number(s.saleExpense)||0); }
 /* amount still owed on a sale, computed from amounts (not the status label) */
 function saleDue(s){ return Math.max(0, saleGrand(s) - (Number(s.paid)||0)); }
 function purchaseDue(p){ return Math.max(0, purchaseTotal(p) - (Number(p.paid)||0)); }
@@ -322,6 +322,7 @@ const VIEWS = {
   staff:{title:"Staff", render:renderStaff},
   reports:{title:"Reports", render:renderReports},
   settings:{title:"Settings", render:renderSettings},
+  approvals:{title:"Approvals", render:renderApprovals},
   staffhome:{title:"Staff", render:renderStaffHome}
 };
 let currentView = "dashboard";
@@ -330,6 +331,7 @@ const PRIMARY_TABS = ["dashboard","sales","purchases","expenses"];
 function go(view){
   if(staffMode && view!=="staffhome"){ view="staffhome"; }   // staff are locked to their own dashboard
   if(view==="settings" && !isAdmin()){ toast("Only admins can open Settings","err"); view="dashboard"; }
+  if(view==="approvals" && !isAdmin()){ view="dashboard"; }
   currentView = view;
   $$(".nav-item").forEach(b=>b.classList.toggle("active", b.dataset.view===view));
   // bottom-nav "More" lights up for any non-primary view
@@ -343,6 +345,7 @@ function go(view){
   closeSheet();
   const fab=$("#fab");
   if(fab) fab.classList.toggle("hide", ["settings","reports"].includes(view));
+  updateApprovalBadge();
   window.scrollTo(0,0);
 }
 function buzz(ms){ try{ if(navigator.vibrate) navigator.vibrate(ms||10); }catch(e){} }
@@ -373,6 +376,7 @@ const MORE_LINKS = [
   {view:"customers", icon:"👥", label:"Customers", sub:"Who buys from you"},
   {view:"suppliers", icon:"🏭", label:"Suppliers", sub:"Who you buy from"},
   {view:"staff", icon:"🧑‍🔧", label:"Staff", sub:"Your team"},
+  {view:"approvals", icon:"✅", label:"Approvals", sub:"Approve staff stock", admin:true},
   {view:"reports", icon:"📈", label:"Reports", sub:"Profit & loss"},
   {view:"settings", icon:"⚙️", label:"Settings", sub:"Business, GST, logins", admin:true}
 ];
@@ -520,7 +524,8 @@ function renderDashboard(){
   const totalCOGS = sumBy(sales, saleCost);
   const grossProfit = totalRevenue - totalCOGS;
   const totalExpenses = sumBy(expenses, e=>e.amount);
-  const netProfit = grossProfit - totalExpenses;
+  const saleExpenses = sumBy(sales, s=>Number(s.saleExpense)||0);   // per-sale costs (kept OUT of the Expenses tab)
+  const netProfit = grossProfit - totalExpenses - saleExpenses;
   const totalPurchases = sumBy(purchases, purchaseTotal);
 
   // Outstanding computed from amounts, not the status label, so stale paid
@@ -1741,8 +1746,15 @@ function renderUserMenu(){
   $("#logoutBtn").onclick=logout;
 }
 function applyRoleGating(){
-  // only admins see Settings
-  $$(".nav-item").forEach(b=>{ if(b.dataset.view==="settings") b.style.display=isAdmin()?"":"none"; });
+  // only admins see Settings + Approvals
+  $$(".nav-item").forEach(b=>{ if(b.dataset.view==="settings"||b.dataset.view==="approvals") b.style.display=isAdmin()?"":"none"; });
+  updateApprovalBadge();
+}
+function updateApprovalBadge(){
+  const el=$("#apprBadge"); if(!el) return;
+  const n = (DATA.approvals||[]).filter(a=>a.status==="pending").length;
+  el.textContent = n ? String(n) : "";
+  el.style.display = n ? "" : "none";
 }
 function showLogin(){
   $("#loginScreen").classList.add("open");
@@ -1825,6 +1837,48 @@ async function enterApp(){
 }
 
 /* ============================================================
+   APPROVALS — owner reviews & approves staff inventory submissions.
+   ============================================================ */
+function renderApprovals(){
+  addTopAction("🔄 Refresh","",()=>drawApprovals());
+  $("#content").innerHTML=`<div class="panel"><div class="panel-head"><h3 id="apprHead">Pending approvals</h3></div><div id="apprList"></div></div>`;
+  drawApprovals();
+}
+function drawApprovals(){
+  const pending=(DATA.approvals||[]).filter(a=>a.status==="pending").sort((a,b)=>(b.createdAt||"").localeCompare(a.createdAt||""));
+  const head=$("#apprHead"); if(head) head.textContent=`Pending approvals (${pending.length})`;
+  updateApprovalBadge();
+  if(!pending.length){ $("#apprList").innerHTML=`<div class="muted-line">Nothing waiting for approval 🎉</div>`; return; }
+  $("#apprList").innerHTML = pending.map(a=>{
+    const name=[a.brand,a.model].filter(s=>(s||"").trim()).join(" ")||a.model||"Item";
+    return `<div class="appr-row">
+      <div class="appr-info">
+        <div class="appr-title">${esc(name)}${a.colour?` · <span class="muted-sm">${esc(a.colour)}</span>`:""}</div>
+        <div class="appr-sub">+${num(a.qty)} pcs${Number(a.price)>0?` · sell ${money(a.price)}`:""} · by ${esc(a.by||"Staff")} · ${fmtDate(a.date)}</div>
+      </div>
+      <div class="appr-actions">
+        <button class="btn btn-sm btn-primary" onclick="approveItem('${a.id}')">✓ Approve</button>
+        <button class="btn btn-sm btn-danger" onclick="rejectItem('${a.id}')">✕ Reject</button>
+      </div></div>`;
+  }).join("");
+}
+window.approveItem=(id)=>{
+  const a=(DATA.approvals||[]).find(x=>x.id===id); if(!a||a.status!=="pending") return;
+  const name=[a.brand,a.model].filter(s=>(s||"").trim()).map(s=>s.trim()).join(" ")||(a.model||"Item");
+  const colour=(a.colour||"").trim();
+  let p=DATA.products.find(x=>(x.name||"").toLowerCase()===name.toLowerCase() && (x.color||"").toLowerCase()===colour.toLowerCase());
+  if(p){ p.stock=(Number(p.stock)||0)+(Number(a.qty)||0); if(Number(a.price)>0) p.price=Number(a.price); p.updatedAt=nowISO(); }
+  else { p={id:nextId(),name,brand:(a.brand||"").trim(),color:colour,category:"",sku:"",cost:0,price:Number(a.price)||0,stock:Number(a.qty)||0,reorder:DATA.settings.lowStockDefault,supplier:"",updatedAt:nowISO()}; DATA.products.push(p); }
+  a.status="approved"; a.updatedAt=nowISO(); save();
+  toast("Approved — added to inventory","ok"); drawApprovals();
+};
+window.rejectItem=(id)=>{
+  const a=(DATA.approvals||[]).find(x=>x.id===id); if(!a||a.status!=="pending") return;
+  if(!confirm("Reject this submission?")) return;
+  a.status="rejected"; a.updatedAt=nowISO(); save(); toast("Rejected"); drawApprovals();
+};
+
+/* ============================================================
    STAFF DASHBOARD — simplified SOP view: add inventory + record sales.
    Reached via the staff PIN; locked to this one screen (see go()).
    ============================================================ */
@@ -1839,13 +1893,16 @@ function startStaff(){
 function renderStaffHome(){
   const prods=[...DATA.products].sort((a,b)=>(a.name||"").localeCompare(b.name||""));
   const recent=[...DATA.sales].sort((a,b)=>(b.date||"").localeCompare(a.date||"")).slice(0,6);
+  const pending=(DATA.approvals||[]).filter(a=>a.status==="pending").sort((a,b)=>(b.createdAt||"").localeCompare(a.createdAt||""));
   const lowAt=p=>Number(p.reorder)||DATA.settings.lowStockDefault;
   $("#content").innerHTML=`
     <div class="staff-wrap">
       <div class="staff-actions">
-        <button class="staff-card" id="staffAddInv"><span class="sc-ico">📦</span><span class="sc-t">Add Inventory</span><span class="sc-s">Add stock of an item</span></button>
-        <button class="staff-card" id="staffAddSale"><span class="sc-ico">🛒</span><span class="sc-t">Record Sale</span><span class="sc-s">Log a sale you made</span></button>
+        <button class="staff-card" id="staffAddInv"><span class="sc-ico">📦</span><span class="sc-t">Add Inventory</span><span class="sc-s">Brand · model · colour — needs approval</span></button>
+        <button class="staff-card" id="staffAddSale"><span class="sc-ico">🛒</span><span class="sc-t">Record Sale</span><span class="sc-s">Colour, expenses & net</span></button>
       </div>
+      ${pending.length?`<div class="panel"><div class="panel-head"><h3>Awaiting approval (${pending.length})</h3></div>
+        <div class="staff-list">${pending.map(a=>`<div class="ss-row"><span>${esc([a.brand,a.model].filter(Boolean).join(" ")||a.model||"Item")}${a.colour?` · ${esc(a.colour)}`:""}</span><span class="badge">+${num(a.qty)}</span></div>`).join("")}</div></div>`:""}
       <div class="panel">
         <div class="panel-head"><h3>Current stock</h3></div>
         <div class="staff-list">${prods.length? prods.map(p=>`<div class="ss-row"><span>${esc(p.name)}${p.color?` · ${esc(p.color)}`:""}</span><span class="badge ${stockOf(p)<=lowAt(p)?"low":"ok"}">${num(stockOf(p))}</span></div>`).join("") : `<div class="muted-line">No items yet — tap “Add Inventory”.</div>`}</div>
@@ -1860,45 +1917,73 @@ function renderStaffHome(){
 }
 function staffInventoryForm(){
   buildForm([
-    {name:"name",label:"Item name",value:"",required:true,full:true,placeholder:"Type the item (existing adds stock, new creates it)"},
+    {name:"brand",label:"Brand",value:"",placeholder:"e.g. PRC"},
+    {name:"model",label:"Model",value:"",required:true,placeholder:"e.g. Drift 1:16"},
+    {name:"colour",label:"Colour",value:"",placeholder:"e.g. Red"},
     {name:"qty",label:"Quantity to add",type:"number",step:"1",value:1,required:true},
     {name:"price",label:"Selling price (per unit)",type:"number",value:"",placeholder:"Optional"}
   ],(o)=>{
-    const nm=(o.name||"").trim();
-    if(!nm){ toast("Enter an item name","err"); return; }
+    const model=(o.model||"").trim();
+    if(!model){ toast("Enter the model","err"); return; }
     const qty=Number(o.qty)||0;
     if(!(qty>0)){ toast("Enter a quantity greater than 0","err"); return; }
-    const price=Number(o.price)||0;
-    let p=DATA.products.find(x=>(x.name||"").toLowerCase()===nm.toLowerCase());
-    if(p){ p.stock=(Number(p.stock)||0)+qty; if(price>0) p.price=price; p.updatedAt=nowISO(); }
-    else { p={id:nextId(),name:nm,category:"",color:"",sku:"",cost:0,price:price,stock:qty,reorder:DATA.settings.lowStockDefault,supplier:"",updatedAt:nowISO()}; DATA.products.push(p); }
-    save(); closeModal(); toast("Inventory updated","ok"); renderStaffHome();
-  },"Add to inventory","Add Inventory");
+    // Staff submissions don't touch inventory directly — they queue for owner approval.
+    const a={ id:nextId(), type:"inventory", status:"pending",
+      brand:(o.brand||"").trim(), model, colour:(o.colour||"").trim(),
+      qty, price:Number(o.price)||0, by:(me().name||"Staff"), date:today(), createdAt:nowISO(), updatedAt:nowISO() };
+    DATA.approvals.push(a); save();
+    closeModal(); toast("Sent to owner for approval ✓","ok"); renderStaffHome();
+  },"Send for approval","Add Inventory");
 }
 function staffSaleForm(){
-  const opts=DATA.products.map(p=>({value:p.id,label:`${prodLabel(p)} (stock ${stockOf(p)})`}));
-  buildForm([
-    {name:"productId",label:"Item (from inventory)",type:"select",value:"",placeholder:"— Select / or type below —",options:opts},
-    {name:"itemName",label:"Or item name",value:"",placeholder:"If not in inventory"},
-    {name:"qty",label:"Quantity",type:"number",step:"1",value:1,required:true},
-    {name:"price",label:"Selling price (per unit)",type:"number",value:"",required:true},
-    {name:"customer",label:"Customer",value:"",placeholder:"Name (optional)"},
-    {name:"payStatus",label:"Payment",type:"select",value:"Paid",options:["Paid","Due"]}
-  ],(o)=>{
-    const prod=productById(o.productId);
-    const nm=(o.itemName||"").trim();
-    if(!prod && !nm){ toast("Pick an item or type a name","err"); return; }
-    const qty=Number(o.qty)||0, price=Number(o.price)||0;
+  const models=[...new Set(DATA.products.map(p=>(p.name||"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  openModal("Record Sale",`
+    <form id="ssForm" autocomplete="off">
+      <div class="form-grid">
+        <div class="field full"><label>Item / Model *</label>
+          <select name="model" id="ssModel"><option value="">Select item</option>${models.map(m=>`<option value="${esc(m)}">${esc(m)}</option>`).join("")}<option value="__other">Other (type below)</option></select></div>
+        <div class="field" id="ssColourWrap"><label>Colour</label><select name="colour" id="ssColour"></select></div>
+        <div class="field full" id="ssOtherWrap" style="display:none"><label>Item name</label><input name="otherName" placeholder="If not in inventory"></div>
+        <div class="field"><label>Quantity *</label><input type="number" name="qty" value="1" step="1"></div>
+        <div class="field"><label>Selling price / unit *</label><input type="number" name="price" placeholder="0"></div>
+        <div class="field"><label>Other expenses (₹)</label><input type="number" name="expense" placeholder="0"></div>
+        <div class="field"><label>Expense note</label><input name="expenseNote" placeholder="e.g. transport, packing"></div>
+        <div class="field"><label>Customer</label><input name="customer" placeholder="Name (optional)"></div>
+        <div class="field"><label>Payment</label><select name="payStatus"><option>Paid</option><option>Due</option></select></div>
+      </div>
+      <div class="detail-total"><span>Net · price − expenses</span><strong id="ssNet">₹0</strong></div>
+      <div class="form-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Save sale</button></div>
+    </form>`);
+  const f=$("#ssForm"), modelSel=$("#ssModel"), colourSel=$("#ssColour"), otherWrap=$("#ssOtherWrap"), colourWrap=$("#ssColourWrap");
+  function refreshColours(){
+    const m=modelSel.value;
+    if(m==="__other"){ otherWrap.style.display=""; colourWrap.style.display="none"; return; }
+    otherWrap.style.display="none"; colourWrap.style.display="";
+    const variants=DATA.products.filter(p=>(p.name||"").trim()===m);
+    colourSel.innerHTML = variants.length? variants.map(v=>`<option value="${v.id}">${esc(v.color||"(no colour)")} — stock ${stockOf(v)}</option>`).join("") : `<option value="">— no stock —</option>`;
+  }
+  function recalcNet(){ const q=Number(f.qty.value)||0, pr=Number(f.price.value)||0, ex=Number(f.expense.value)||0; $("#ssNet").textContent=money(q*pr-ex); }
+  modelSel.onchange=refreshColours;
+  ["qty","price","expense"].forEach(n=>{ if(f[n]) f[n].addEventListener("input",recalcNet); });
+  refreshColours(); recalcNet();
+  f.onsubmit=(e)=>{
+    e.preventDefault();
+    const model=modelSel.value;
+    let productId="", itemName="", prod=null;
+    if(model==="__other"){ itemName=(f.otherName.value||"").trim(); }
+    else if(model){ productId=colourSel.value||""; prod=productById(productId); }
+    if(!prod && !itemName){ toast("Pick an item & colour, or type a name","err"); return; }
+    const qty=Number(f.qty.value)||0, price=Number(f.price.value)||0, expense=Number(f.expense.value)||0;
     if(!(qty>0)){ toast("Enter a quantity greater than 0","err"); return; }
     if(!(price>=0)){ toast("Enter a valid price","err"); return; }
-    const total=qty*price;
-    const sale={ id:nextId(), date:today(), productId:o.productId||"", itemName: prod?"":nm,
-      qty, price, discount:0, gstRate:0, costAtSale: prod?(Number(prod.cost)||0):0, channel:"",
-      customer:(o.customer||"").trim(), staff:"Staff", payStatus:o.payStatus||"Paid",
-      paid:(o.payStatus==="Due"?0:total), notes:"", updatedAt:nowISO() };
-    DATA.sales.push(sale); adjustStock(sale.productId, -qty); maybeAddCustomer(sale.customer); save();
+    const total=qty*price, pay=f.payStatus.value||"Paid";
+    const sale={ id:nextId(), date:today(), productId, itemName: prod?"":itemName, qty, price, discount:0, gstRate:0,
+      costAtSale: prod?(Number(prod.cost)||0):0, channel:"", customer:(f.customer.value||"").trim(), staff:(me().name||"Staff"),
+      payStatus:pay, paid:(pay==="Due"?0:total), saleExpense:expense, saleExpenseNote:(f.expenseNote.value||"").trim(),
+      notes:"", updatedAt:nowISO() };
+    DATA.sales.push(sale); adjustStock(productId,-qty); maybeAddCustomer(sale.customer); save();
     closeModal(); toast("Sale recorded","ok"); renderStaffHome();
-  },"Save sale","Record Sale");
+  };
 }
 
 // Live cross-device updates: when another phone writes, pull + re-render.

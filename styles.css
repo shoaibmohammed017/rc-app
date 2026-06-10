@@ -290,6 +290,16 @@ body.staff-mode #hamburger{ display:none !important }
   padding:12px 14px; background:var(--surface-2); border:1px solid var(--line); border-radius:12px; font-weight:700 }
 .detail-total strong{ font-size:18px }
 
+/* ---------- Approvals ---------- */
+.nav-badge{ display:none; min-width:18px; height:18px; padding:0 5px; border-radius:9px; background:var(--red); color:#fff;
+  font-size:11px; font-weight:800; font-style:normal; line-height:18px; text-align:center; margin-left:auto }
+.appr-row{ display:flex; align-items:center; gap:12px; padding:12px 4px; border-bottom:1px solid var(--line-soft) }
+.appr-row:last-child{ border-bottom:0 }
+.appr-info{ flex:1; min-width:0 }
+.appr-title{ font-weight:800; font-size:15px }
+.appr-sub{ font-size:12px; color:var(--muted); margin-top:2px }
+.appr-actions{ display:flex; gap:6px; flex:0 0 auto }
+
 /* ============================================================
    Bottom nav + FAB (mobile)
    ============================================================ */
