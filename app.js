@@ -409,7 +409,7 @@ function openQuickAdd(){
     buzz();
     const f=b.dataset.add;
     if(f==="sale") saleForm();
-    else if(f==="purchase") purchaseForm();
+    else if(f==="purchase") purchaseOrderForm();
     else if(f==="expense") expenseForm();
     else if(f==="product") productForm();
   });
@@ -881,7 +881,7 @@ function saleForm(id){
    ============================================================ */
 let purFilter={q:"",from:"",to:""};
 function renderPurchases(){
-  addTopAction("➕ New Purchase","btn-primary",()=>purchaseForm());
+  addTopAction("➕ New Purchase","btn-primary",()=>purchaseOrderForm());
   addTopAction("⬇️ Export CSV","",()=>exportCSV("purchases"));
   $("#content").innerHTML = `<div class="panel">
     <div class="filters">
@@ -1015,6 +1015,89 @@ function purchaseForm(id){
     save();closeModal();toast("Purchase saved","ok");
     if(currentView==="purchases") drawPurchases(); else go(currentView);
   },"Save Purchase", id?"Edit Purchase":"New Purchase");
+}
+/* Multi-model / multi-colour Purchase Order: one supplier+date, many models,
+   each with several colour+qty rows. Saves one purchase line per (model,colour),
+   all sharing a poNo, so the grouped list shows it as a single expandable row.
+   Inventory-independent (no product/stock changes). */
+function purchaseOrderForm(){
+  const dl=(arr)=>[...new Set(arr.filter(Boolean))].sort().map(v=>`<option value="${esc(v)}">`).join("");
+  const brandL=dl([...DATA.products.map(x=>x.brand),...DATA.purchases.map(x=>x.brand)]);
+  const colourL=dl([...DATA.products.map(x=>x.color),...DATA.purchases.map(x=>x.color)]);
+  const modelL=dl([...DATA.products.map(x=>x.name),...DATA.purchases.map(x=>x.itemName)]);
+  const supL=dl(DATA.suppliers.map(s=>s.name));
+  const staffSel=DATA.staff.map(x=>`<option>${esc(x.name)}</option>`).join("");
+  openModal("New Purchase",`
+    <datalist id="poBrandL">${brandL}</datalist><datalist id="poColourL">${colourL}</datalist>
+    <datalist id="poModelL">${modelL}</datalist><datalist id="poSupL">${supL}</datalist>
+    <form id="poForm" autocomplete="off">
+      <div class="form-grid">
+        <div class="field"><label>Date *</label><input type="date" name="date" value="${today()}"></div>
+        <div class="field"><label>Supplier</label><input name="supplier" list="poSupL" placeholder="Type or pick"></div>
+        <div class="field"><label>Bought by</label><select name="staff"><option value="">Who spent</option>${staffSel}</select></div>
+        <div class="field"><label>Invoice / bill no.</label><input name="inv" placeholder="optional"></div>
+      </div>
+      <div class="po-sec-label">Models &amp; colours</div>
+      <div id="poModels"></div>
+      <button type="button" class="btn btn-sm" id="poAddModel">➕ Add another model</button>
+      <div class="form-grid" style="margin-top:14px">
+        <div class="field"><label>Other charges (shipping/packing)</label><input type="number" name="extra" value="0" min="0"></div>
+        <div class="field"><label>Payment status</label><select name="payStatus"><option>Paid</option><option>Partial</option><option>Due</option></select></div>
+        <div class="field" id="poPaidWrap" style="display:none"><label>Amount paid</label><input type="number" name="paid" value="0" min="0"></div>
+        <div class="field"><label>Notes</label><input name="notes" placeholder="optional"></div>
+      </div>
+      <div class="detail-total"><span>Grand total</span><strong id="poGrand">₹0</strong></div>
+      <div class="form-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Save purchase</button></div>
+    </form>`);
+  const f=$("#poForm"), modelsEl=$("#poModels");
+  const colourRow=()=>`<div class="po-crow"><input class="po-color" list="poColourL" placeholder="Colour"><input class="po-cqty" type="number" inputmode="numeric" placeholder="Qty" min="0"><button type="button" class="icon-btn del po-cdel" title="Remove">✕</button></div>`;
+  const modelBlock=()=>`<div class="po-line"><div class="po-line-head"><input class="po-brand" list="poBrandL" placeholder="Brand (optional)"><input class="po-model" list="poModelL" placeholder="Model / product name"><button type="button" class="icon-btn del po-del" title="Remove model">✕</button></div><div class="po-rate-wrap"><span class="po-rate-lbl">Cost ₹/unit</span><input class="po-rate" type="number" inputmode="decimal" placeholder="0" min="0"></div><div class="po-colors"></div><button type="button" class="btn btn-sm po-addcolor">＋ Add colour</button><div class="po-linetot"></div></div>`;
+  function recompute(){
+    let grand=0;
+    modelsEl.querySelectorAll(".po-line").forEach(b=>{
+      const rate=Number(b.querySelector(".po-rate").value)||0; let t=0;
+      b.querySelectorAll(".po-crow").forEach(r=>{ t+=(Number(r.querySelector(".po-cqty").value)||0)*rate; });
+      b.querySelector(".po-linetot").textContent = t? money(t):""; grand+=t;
+    });
+    $("#poGrand").textContent = money(grand + (Number(f.extra.value)||0));
+  }
+  function wireColours(b){ b.querySelectorAll(".po-crow").forEach(r=>{ r.querySelector(".po-cdel").onclick=()=>{ r.remove(); recompute(); }; r.querySelector(".po-cqty").oninput=recompute; }); }
+  function wireModel(b){
+    const wrap=b.querySelector(".po-colors");
+    b.querySelector(".po-addcolor").onclick=()=>{ wrap.insertAdjacentHTML("beforeend",colourRow()); wireColours(b); recompute(); };
+    b.querySelector(".po-del").onclick=()=>{ b.remove(); recompute(); };
+    b.querySelector(".po-rate").addEventListener("input",recompute);
+    wrap.insertAdjacentHTML("beforeend",colourRow()); wireColours(b);
+  }
+  const addModel=()=>{ modelsEl.insertAdjacentHTML("beforeend",modelBlock()); wireModel(modelsEl.lastElementChild); recompute(); };
+  $("#poAddModel").onclick=addModel;
+  f.payStatus.onchange=function(){ $("#poPaidWrap").style.display=this.value==="Partial"?"":"none"; };
+  addModel();
+  f.onsubmit=(e)=>{
+    e.preventDefault();
+    const date=f.date.value||today(), supplier=(f.supplier.value||"").trim(), staff=f.staff.value||"";
+    const inv=(f.inv.value||"").trim(), notes=(f.notes.value||"").trim(), extra=Number(f.extra.value)||0;
+    const payStatus=f.payStatus.value, paidInput=Number(f.paid.value)||0;
+    const lines=[];
+    modelsEl.querySelectorAll(".po-line").forEach(b=>{
+      const brand=(b.querySelector(".po-brand").value||"").trim(), model=(b.querySelector(".po-model").value||"").trim(), rate=Number(b.querySelector(".po-rate").value)||0;
+      if(!model) return;
+      b.querySelectorAll(".po-crow").forEach(r=>{ const color=(r.querySelector(".po-color").value||"").trim(), qty=Number(r.querySelector(".po-cqty").value)||0; if(qty>0) lines.push({brand,model,color,qty,rate}); });
+    });
+    if(!lines.length){ toast("Add at least one model with a colour & quantity","err"); return; }
+    const itemsTotal=lines.reduce((s,l)=>s+l.qty*l.rate,0), grand=itemsTotal+extra;
+    const poPaid=payStatus==="Paid"?grand:payStatus==="Due"?0:Math.min(Math.max(0,paidInput),grand);
+    const poNo=inv||("PO-"+String((DATA.settings.purchaseSeq=(Number(DATA.settings.purchaseSeq)||0)+1)).padStart(4,"0"));
+    const ts=nowISO();
+    lines.forEach(l=>{
+      const lineAmt=l.qty*l.rate, shipShare=itemsTotal>0?Math.round(extra*(lineAmt/itemsTotal)*100)/100:0, lineTotal=lineAmt+shipShare;
+      const paid=payStatus==="Paid"?lineTotal:payStatus==="Due"?0:(grand>0?Math.round(poPaid*(lineTotal/grand)*100)/100:0);
+      DATA.purchases.push({ id:nextId(), date, productId:"", brand:l.brand, itemName:l.model, color:l.color, qty:l.qty, price:l.rate, shipping:shipShare, supplier, staff, payStatus, paid, poNo, notes, updatedAt:ts });
+    });
+    maybeAddSupplier(supplier);
+    save(); closeModal(); toast(`${lines.length} item(s) added to this purchase`,"ok");
+    if(currentView==="purchases") drawPurchases(); else go(currentView);
+  };
 }
 
 /* ============================================================

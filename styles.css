@@ -300,6 +300,23 @@ body.staff-mode #hamburger{ display:none !important }
 .appr-sub{ font-size:12px; color:var(--muted); margin-top:2px }
 .appr-actions{ display:flex; gap:6px; flex:0 0 auto }
 
+/* ---------- Multi-model Purchase Order form ---------- */
+.po-sec-label{ font-size:12px; font-weight:800; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; margin:16px 0 8px }
+.po-line{ border:1px solid var(--line); border-radius:12px; padding:12px; margin-bottom:10px; background:var(--surface-2) }
+.po-line input{ background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:10px 12px; color:var(--text); font-size:16px; min-width:0 }
+.po-line-head{ display:flex; gap:6px; align-items:center }
+.po-line-head .po-brand{ flex:0 0 34% } .po-line-head .po-model{ flex:1 }
+.po-rate-wrap{ display:flex; align-items:center; gap:8px; margin:8px 0 4px }
+.po-rate-lbl{ font-size:12px; color:var(--muted); font-weight:700; white-space:nowrap }
+.po-rate-wrap .po-rate{ flex:1 }
+.po-colors{ display:flex; flex-direction:column; gap:6px; margin:8px 0 }
+.po-crow{ display:flex; gap:6px; align-items:center }
+.po-crow .po-color{ flex:1 } .po-crow .po-cqty{ width:78px; flex:0 0 auto; text-align:right }
+.po-addcolor{ margin-top:2px }
+.po-linetot{ font-size:12px; font-weight:800; text-align:right; margin-top:6px; min-height:14px; color:var(--primary-dark) }
+.dark .po-linetot{ color:var(--amber) }
+.icon-btn.del.po-del,.icon-btn.del.po-cdel{ flex:0 0 auto }
+
 /* ============================================================
    Bottom nav + FAB (mobile)
    ============================================================ */
