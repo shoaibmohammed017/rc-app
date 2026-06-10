@@ -435,6 +435,11 @@ function buildForm(fields, onSubmit, submitLabel="Save"){
       if(f.addable) html += `<option value="__ADDNEW__">➕ Add new…</option>`;
       html += `</select>`;
       if(f.addable) html += `<span class="add-hint">Choose “Add new…” to create &amp; save an option</span>`;
+    } else if(f.type==="combo"){
+      // text input with a dropdown of suggestions (type anything, or pick an existing value)
+      const dlid="dl_"+f.name+"_"+formId;
+      html += `<input type="text" name="${f.name}" value="${val}" placeholder="${esc(f.placeholder||"")}" list="${dlid}" ${req} autocomplete="off">`;
+      html += `<datalist id="${dlid}">${(f.options||[]).map(o=>`<option value="${esc(typeof o==="object"?o.value:o)}"></option>`).join("")}</datalist>`;
     } else if(f.type==="textarea"){
       html += `<textarea name="${f.name}" placeholder="${esc(f.placeholder||"")}" ${req}>${val}</textarea>`;
     } else {
@@ -910,12 +915,12 @@ function purchaseGroups(rows){
 function drawPurchases(){
   let rows = rangeFilter(DATA.purchases, purFilter.from, purFilter.to);
   if(purFilter.q){ const q=purFilter.q; rows=rows.filter(p=>
-    (p.itemName||"").toLowerCase().includes(q)||(p.supplier||"").toLowerCase().includes(q)||(p.staff||"").toLowerCase().includes(q)); }
+    (p.itemName||"").toLowerCase().includes(q)||(p.brand||"").toLowerCase().includes(q)||(p.supplier||"").toLowerCase().includes(q)||(p.staff||"").toLowerCase().includes(q)); }
   let groups = purchaseGroups(rows);
   groups.sort((a,b)=>(b.date||"").localeCompare(a.date||""));
   const cols=[
     {label:"Date",render:g=>fmtDate(g.date)},
-    {label:"Purchase",render:g=>`<strong>${esc(g.lines[0].itemName||"—")}</strong>${g.lines.length>1?` <span class="muted-sm">+${g.lines.length-1} more</span>`:""}`},
+    {label:"Purchase",render:g=>`<strong>${g.lines[0].brand?esc(g.lines[0].brand)+" ":""}${esc(g.lines[0].itemName||"—")}</strong>${g.lines.length>1?` <span class="muted-sm">+${g.lines.length-1} more</span>`:""}`},
     {label:"Items",num:true,render:g=>num(g.lines.length)},
     {label:"Qty",num:true,render:g=>num(g.qty)},
     {label:"Total",num:true,render:g=>`<strong>${money(g.total)}</strong>`},
@@ -935,7 +940,7 @@ window.openPurchaseGroup=(encKey)=>{
   if(!g){ toast("Purchase not found","err"); return; }
   const lines=[...g.lines].sort((a,b)=>(a.itemName||"").localeCompare(b.itemName||""));
   const body=lines.map(l=>`<tr>
-    <td>${esc(l.itemName||"—")}${l.color?`<span class="muted-sm"> · ${esc(l.color)}</span>`:""}</td>
+    <td>${l.brand?`<span class="muted-sm">${esc(l.brand)} </span>`:""}${esc(l.itemName||"—")}${l.color?`<span class="muted-sm"> · ${esc(l.color)}</span>`:""}</td>
     <td class="num">${num(l.qty)}</td>
     <td class="num">${money(l.price)}</td>
     <td class="num">${money(purchaseTotal(l))}</td>
@@ -973,9 +978,13 @@ window.deletePurchaseGroup=(encKey)=>{
 };
 function purchaseForm(id){
   const p = id? DATA.purchases.find(x=>x.id===id):{date:today(),qty:1,payStatus:"Paid",shipping:0,paid:0,staff:me().name};
+  const brandOpts=[...new Set([...DATA.products.map(x=>x.brand),...DATA.purchases.map(x=>x.brand)].filter(Boolean))].sort();
+  const colourOpts=[...new Set([...DATA.products.map(x=>x.color),...DATA.purchases.map(x=>x.color)].filter(Boolean))].sort();
   buildForm([
     {name:"date",label:"Date",type:"date",value:p.date,required:true},
+    {name:"brand",label:"Brand",type:"combo",value:p.brand,options:brandOpts,placeholder:"e.g. PRC (optional)"},
     {name:"itemName",label:"Item / product name",value:p.itemName||"",required:true,full:true,placeholder:"e.g. 1:10 Off-road Buggy"},
+    {name:"color",label:"Colour",type:"combo",value:p.color,options:colourOpts,placeholder:"e.g. Red (optional)"},
     {name:"qty",label:"Quantity",type:"number",step:"1",value:p.qty,required:true},
     {name:"price",label:"Cost price (per unit)",type:"number",value:p.price,required:true},
     {name:"shipping",label:"Shipping / other cost",type:"number",value:p.shipping},
