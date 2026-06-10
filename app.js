@@ -1184,11 +1184,14 @@ window.delProductVariant=(id,encKey)=>{
 };
 function productForm(id, preset){
   const p=id?productById(id):Object.assign({stock:0,reorder:DATA.settings.lowStockDefault}, preset||{});
+  const brandOpts=[...new Set([...DATA.products.map(x=>x.brand),...DATA.purchases.map(x=>x.brand)].filter(Boolean))].sort();
+  const colourOpts=[...new Set([...DATA.products.map(x=>x.color),...DATA.purchases.map(x=>x.color)].filter(Boolean))].sort();
   buildForm([
-    {name:"name",label:"Product name",value:p.name,required:true,full:true,placeholder:"e.g. 1:10 Off-road Buggy"},
+    {name:"name",label:"Product name (model)",value:p.name,required:true,full:true,placeholder:"e.g. 1:10 Off-road Buggy"},
+    {name:"brand",label:"Brand",type:"combo",value:p.brand,options:brandOpts,placeholder:"e.g. PRC (optional)"},
     {name:"category",label:"Category",type:"select",value:p.category,options:DATA.settings.productCategories,placeholder:"Select",addable:"productCategories"},
     {name:"sku",label:"SKU / Code",value:p.sku,placeholder:"Optional"},
-    {name:"color",label:"Colour",value:p.color,placeholder:"e.g. Red (optional)"},
+    {name:"color",label:"Colour",type:"combo",value:p.color,options:colourOpts,placeholder:"e.g. Red (optional)"},
     {name:"cost",label:"Cost price (per unit)",type:"number",value:p.cost},
     {name:"price",label:"Selling price (per unit)",type:"number",value:p.price},
     {name:"stock",label:"Current stock qty",type:"number",step:"1",value:p.stock},
