@@ -1160,7 +1160,7 @@ function expenseForm(id){
    ============================================================ */
 let invFilter={q:"",cat:""};
 function renderInventory(){
-  addTopAction("➕ Add Product","btn-primary",()=>productForm());
+  addTopAction("➕ Add Inventory","btn-primary",()=>productBulkForm());
   addTopAction("⬇️ Export CSV","",()=>exportCSV("products"));
   $("#content").innerHTML=`<div class="panel">
     <div class="filters">
@@ -1288,6 +1288,65 @@ function productForm(id, preset){
     else { o.id=nextId(); DATA.products.push(o); }
     save();closeModal();toast("Product saved","ok");drawInventory&&(currentView==="inventory"?drawInventory():go(currentView));
   },"Save Product", id?"Edit Product":"Add Product");
+}
+/* Bulk add inventory: many models, each with a cost+sell price and multiple
+   colour+qty rows. Each (model,colour) creates a product or tops up the matching
+   one (by model+colour). Owner-side, applies straight to stock. */
+function productBulkForm(){
+  const dl=(arr)=>[...new Set(arr.filter(Boolean))].sort().map(v=>`<option value="${esc(v)}">`).join("");
+  const brandL=dl([...DATA.products.map(x=>x.brand),...DATA.purchases.map(x=>x.brand)]);
+  const colourL=dl([...DATA.products.map(x=>x.color),...DATA.purchases.map(x=>x.color)]);
+  const modelL=dl([...DATA.products.map(x=>x.name),...DATA.purchases.map(x=>x.itemName)]);
+  openModal("Add Inventory",`
+    <datalist id="ivBrandL">${brandL}</datalist><datalist id="ivColourL">${colourL}</datalist><datalist id="ivModelL">${modelL}</datalist>
+    <form id="ivForm" autocomplete="off">
+      <div class="po-sec-label">Models &amp; colours</div>
+      <div id="ivModels"></div>
+      <button type="button" class="btn btn-sm" id="ivAddModel">➕ Add another model</button>
+      <div class="detail-total"><span id="ivCount">0 item(s) · 0 pcs</span><strong id="ivVal">₹0</strong></div>
+      <div class="form-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancel</button><button type="submit" class="btn btn-primary">Add to inventory</button></div>
+    </form>`);
+  const f=$("#ivForm"), modelsEl=$("#ivModels");
+  const colourRow=()=>`<div class="po-crow"><input class="po-color" list="ivColourL" placeholder="Colour"><input class="po-cqty" type="number" inputmode="numeric" placeholder="Qty" min="0"><button type="button" class="icon-btn del po-cdel" title="Remove">✕</button></div>`;
+  const modelBlock=()=>`<div class="po-line"><div class="po-line-head"><input class="po-brand" list="ivBrandL" placeholder="Brand (optional)"><input class="po-model" list="ivModelL" placeholder="Model / product name"><button type="button" class="icon-btn del po-del" title="Remove model">✕</button></div><div class="po-rate-wrap"><span class="po-rate-lbl">Cost ₹</span><input class="iv-cost po-rate" type="number" placeholder="0" min="0"><span class="po-rate-lbl">Sell ₹</span><input class="iv-price po-rate" type="number" placeholder="0" min="0"></div><div class="po-colors"></div><button type="button" class="btn btn-sm po-addcolor">＋ Add colour</button><div class="po-linetot"></div></div>`;
+  function recompute(){
+    let items=0, pcs=0, val=0;
+    modelsEl.querySelectorAll(".po-line").forEach(b=>{
+      const cost=Number(b.querySelector(".iv-cost").value)||0; let t=0;
+      b.querySelectorAll(".po-crow").forEach(r=>{ t+=(Number(r.querySelector(".po-cqty").value)||0); });
+      if(t>0) items++; pcs+=t; val+=t*cost;
+      b.querySelector(".po-linetot").textContent = t? `${t} pcs`:"";
+    });
+    $("#ivCount").textContent = `${items} item(s) · ${pcs} pcs`; $("#ivVal").textContent = money(val);
+  }
+  function wireColours(b){ b.querySelectorAll(".po-crow").forEach(r=>{ r.querySelector(".po-cdel").onclick=()=>{ r.remove(); recompute(); }; r.querySelector(".po-cqty").oninput=recompute; }); }
+  function wireModel(b){
+    const wrap=b.querySelector(".po-colors");
+    b.querySelector(".po-addcolor").onclick=()=>{ wrap.insertAdjacentHTML("beforeend",colourRow()); wireColours(b); recompute(); };
+    b.querySelector(".po-del").onclick=()=>{ b.remove(); recompute(); };
+    b.querySelector(".iv-cost").addEventListener("input",recompute);
+    wrap.insertAdjacentHTML("beforeend",colourRow()); wireColours(b);
+  }
+  const addModel=()=>{ modelsEl.insertAdjacentHTML("beforeend",modelBlock()); wireModel(modelsEl.lastElementChild); recompute(); };
+  $("#ivAddModel").onclick=addModel; addModel();
+  f.onsubmit=(e)=>{
+    e.preventDefault();
+    const ts=nowISO(); const items=[];
+    modelsEl.querySelectorAll(".po-line").forEach(b=>{
+      const brand=(b.querySelector(".po-brand").value||"").trim(), model=(b.querySelector(".po-model").value||"").trim();
+      const cost=Number(b.querySelector(".iv-cost").value)||0, price=Number(b.querySelector(".iv-price").value)||0;
+      if(!model) return;
+      b.querySelectorAll(".po-crow").forEach(r=>{ const color=(r.querySelector(".po-color").value||"").trim(), qty=Number(r.querySelector(".po-cqty").value)||0; if(qty>0) items.push({brand,model,color,cost,price,qty}); });
+    });
+    if(!items.length){ toast("Add at least one model with a colour & quantity","err"); return; }
+    items.forEach(it=>{
+      let p=DATA.products.find(x=>(x.name||"").toLowerCase()===it.model.toLowerCase() && (x.color||"").toLowerCase()===it.color.toLowerCase());
+      if(p){ p.stock=(Number(p.stock)||0)+it.qty; if(it.cost>0)p.cost=it.cost; if(it.price>0)p.price=it.price; if(it.brand&&!p.brand)p.brand=it.brand; p.updatedAt=ts; }
+      else { p={id:nextId(),name:it.model,brand:it.brand,color:it.color,category:"",sku:"",cost:it.cost,price:it.price,stock:it.qty,reorder:DATA.settings.lowStockDefault,supplier:"",updatedAt:ts}; DATA.products.push(p); }
+    });
+    save(); closeModal(); toast(`${items.length} item(s) added to inventory`,"ok");
+    if(currentView==="inventory") drawInventory(); else go(currentView);
+  };
 }
 function adjustStock(productId, delta){
   const p=productById(productId);
