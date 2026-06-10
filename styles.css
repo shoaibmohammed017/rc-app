@@ -256,6 +256,25 @@ td.num,th.num{ text-align:right }
 .login-err{ color:var(--red); font-size:13px; min-height:18px; margin-bottom:8px; font-weight:700 }
 .login-hint{ color:var(--muted); font-size:12px; margin-top:16px; line-height:1.5 }
 
+/* ---------- Staff dashboard (simplified SOP view) ---------- */
+body.staff-mode .sidebar,
+body.staff-mode .bottomnav,
+body.staff-mode .fab,
+body.staff-mode #hamburger{ display:none !important }
+.staff-wrap{ display:flex; flex-direction:column; gap:16px; max-width:720px; margin:0 auto; width:100% }
+.staff-actions{ display:grid; grid-template-columns:1fr 1fr; gap:12px }
+.staff-card{ display:flex; flex-direction:column; align-items:flex-start; gap:4px; padding:22px 18px; border-radius:18px;
+  border:1px solid var(--line); background:var(--surface); color:var(--text); cursor:pointer; text-align:left }
+.staff-card:active{ transform:scale(.98) }
+.staff-card .sc-ico{ font-size:30px; line-height:1 }
+.staff-card .sc-t{ font-weight:800; font-size:16px }
+.staff-card .sc-s{ font-size:12px; color:var(--muted) }
+.staff-list .ss-row{ display:flex; justify-content:space-between; align-items:center; gap:10px;
+  padding:10px 2px; border-bottom:1px solid var(--line-soft); font-size:14px }
+.staff-list .ss-row:last-child{ border-bottom:0 }
+.muted-line{ color:var(--muted); font-size:13px; padding:10px 2px }
+@media(max-width:520px){ .staff-actions{ grid-template-columns:1fr } }
+
 /* ============================================================
    Bottom nav + FAB (mobile)
    ============================================================ */

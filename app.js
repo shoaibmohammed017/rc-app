@@ -34,7 +34,9 @@ function defaultData(){
    The two are independent — here we run no-login AND synced.
    Set SYNC=false to go back to local-only on this device. */
 const NO_LOGIN = true;
-const APP_PIN = "2328";   // simple PIN lock (replaces username/password)
+const APP_PIN = "2328";     // owner PIN — opens the full app
+const STAFF_PIN = "1234";   // staff PIN — opens the simplified staff dashboard (add inventory + sales)
+let staffMode = false;      // true while a staff PIN session is active
 const SYNC = true;
 const CFG = window.RC_CONFIG || {};
 const BIZ_ID = CFG.BUSINESS_ID || "main";
@@ -311,12 +313,14 @@ const VIEWS = {
   suppliers:{title:"Suppliers", render:renderSuppliers},
   staff:{title:"Staff", render:renderStaff},
   reports:{title:"Reports", render:renderReports},
-  settings:{title:"Settings", render:renderSettings}
+  settings:{title:"Settings", render:renderSettings},
+  staffhome:{title:"Staff", render:renderStaffHome}
 };
 let currentView = "dashboard";
 
 const PRIMARY_TABS = ["dashboard","sales","purchases","expenses"];
 function go(view){
+  if(staffMode && view!=="staffhome"){ view="staffhome"; }   // staff are locked to their own dashboard
   if(view==="settings" && !isAdmin()){ toast("Only admins can open Settings","err"); view="dashboard"; }
   currentView = view;
   $$(".nav-item").forEach(b=>b.classList.toggle("active", b.dataset.view===view));
@@ -1626,6 +1630,7 @@ function showLogin(){
   setTimeout(()=>{ const p=$("#loginPin"); if(p) p.focus(); },50);
 }
 function startApp(){
+  document.body.classList.remove("staff-mode");
   $("#loginScreen").classList.remove("open");
   applyBranding();
   renderUserMenu();
@@ -1650,7 +1655,9 @@ async function init(){
   $("#loginForm").onsubmit=async (e)=>{
     e.preventDefault();
     const pin=($("#loginPin").value||"").trim();
-    if(pin!==APP_PIN){
+    if(pin===APP_PIN){ staffMode=false; }
+    else if(pin===STAFF_PIN){ staffMode=true; }
+    else {
       $("#loginErr").textContent="Wrong PIN";
       $("#loginPin").value=""; $("#loginPin").focus();
       try{ buzz(); }catch(_){}
@@ -1679,15 +1686,96 @@ async function init(){
 // After a correct PIN: become the local owner and (with SYNC on) pull cloud data,
 // take a daily auto-backup, and listen for live cross-device updates.
 async function enterApp(){
-  currentUser = (DATA.users && DATA.users[0]) || { id:"local", name:"Owner", role:"admin" };
-  currentUser.role = "admin";
+  if(staffMode){
+    currentUser = { id:"staff", name:"Staff", role:"staff" };
+  } else {
+    currentUser = (DATA.users && DATA.users[0]) || { id:"local", name:"Owner", role:"admin" };
+    currentUser.role = "admin";
+  }
   $("#loginScreen").classList.remove("open");
   if(CLOUD){
     await fetchCloud();
     autoBackup();
     setupRealtime();
   }
-  startApp();
+  if(staffMode) startStaff(); else startApp();
+}
+
+/* ============================================================
+   STAFF DASHBOARD — simplified SOP view: add inventory + record sales.
+   Reached via the staff PIN; locked to this one screen (see go()).
+   ============================================================ */
+function startStaff(){
+  document.body.classList.add("staff-mode");
+  $("#loginScreen").classList.remove("open");
+  applyBranding();
+  $("#userMenu").innerHTML = `<button class="btn btn-sm" id="staffLock">🔒 Lock</button>`;
+  const lk=$("#staffLock"); if(lk) lk.onclick=()=>{ buzz(); location.reload(); };
+  go("staffhome");
+}
+function renderStaffHome(){
+  const prods=[...DATA.products].sort((a,b)=>(a.name||"").localeCompare(b.name||""));
+  const recent=[...DATA.sales].sort((a,b)=>(b.date||"").localeCompare(a.date||"")).slice(0,6);
+  const lowAt=p=>Number(p.reorder)||DATA.settings.lowStockDefault;
+  $("#content").innerHTML=`
+    <div class="staff-wrap">
+      <div class="staff-actions">
+        <button class="staff-card" id="staffAddInv"><span class="sc-ico">📦</span><span class="sc-t">Add Inventory</span><span class="sc-s">Add stock of an item</span></button>
+        <button class="staff-card" id="staffAddSale"><span class="sc-ico">🛒</span><span class="sc-t">Record Sale</span><span class="sc-s">Log a sale you made</span></button>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>Current stock</h3></div>
+        <div class="staff-list">${prods.length? prods.map(p=>`<div class="ss-row"><span>${esc(p.name)}${p.color?` · ${esc(p.color)}`:""}</span><span class="badge ${stockOf(p)<=lowAt(p)?"low":"ok"}">${num(stockOf(p))}</span></div>`).join("") : `<div class="muted-line">No items yet — tap “Add Inventory”.</div>`}</div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>Recent sales</h3></div>
+        <div class="staff-list">${recent.length? recent.map(s=>`<div class="ss-row"><span>${esc((productById(s.productId)||{}).name||s.itemName||"Item")} ×${num(s.qty)}</span><span>${money(saleTotal(s))}</span></div>`).join("") : `<div class="muted-line">No sales yet.</div>`}</div>
+      </div>
+    </div>`;
+  const ai=$("#staffAddInv"); if(ai) ai.onclick=()=>{ buzz(); staffInventoryForm(); };
+  const as=$("#staffAddSale"); if(as) as.onclick=()=>{ buzz(); staffSaleForm(); };
+}
+function staffInventoryForm(){
+  buildForm([
+    {name:"name",label:"Item name",value:"",required:true,full:true,placeholder:"Type the item (existing adds stock, new creates it)"},
+    {name:"qty",label:"Quantity to add",type:"number",step:"1",value:1,required:true},
+    {name:"price",label:"Selling price (per unit)",type:"number",value:"",placeholder:"Optional"}
+  ],(o)=>{
+    const nm=(o.name||"").trim();
+    if(!nm){ toast("Enter an item name","err"); return; }
+    const qty=Number(o.qty)||0;
+    if(!(qty>0)){ toast("Enter a quantity greater than 0","err"); return; }
+    const price=Number(o.price)||0;
+    let p=DATA.products.find(x=>(x.name||"").toLowerCase()===nm.toLowerCase());
+    if(p){ p.stock=(Number(p.stock)||0)+qty; if(price>0) p.price=price; p.updatedAt=nowISO(); }
+    else { p={id:nextId(),name:nm,category:"",color:"",sku:"",cost:0,price:price,stock:qty,reorder:DATA.settings.lowStockDefault,supplier:"",updatedAt:nowISO()}; DATA.products.push(p); }
+    save(); closeModal(); toast("Inventory updated","ok"); renderStaffHome();
+  },"Add to inventory","Add Inventory");
+}
+function staffSaleForm(){
+  const opts=DATA.products.map(p=>({value:p.id,label:`${prodLabel(p)} (stock ${stockOf(p)})`}));
+  buildForm([
+    {name:"productId",label:"Item (from inventory)",type:"select",value:"",placeholder:"— Select / or type below —",options:opts},
+    {name:"itemName",label:"Or item name",value:"",placeholder:"If not in inventory"},
+    {name:"qty",label:"Quantity",type:"number",step:"1",value:1,required:true},
+    {name:"price",label:"Selling price (per unit)",type:"number",value:"",required:true},
+    {name:"customer",label:"Customer",value:"",placeholder:"Name (optional)"},
+    {name:"payStatus",label:"Payment",type:"select",value:"Paid",options:["Paid","Due"]}
+  ],(o)=>{
+    const prod=productById(o.productId);
+    const nm=(o.itemName||"").trim();
+    if(!prod && !nm){ toast("Pick an item or type a name","err"); return; }
+    const qty=Number(o.qty)||0, price=Number(o.price)||0;
+    if(!(qty>0)){ toast("Enter a quantity greater than 0","err"); return; }
+    if(!(price>=0)){ toast("Enter a valid price","err"); return; }
+    const total=qty*price;
+    const sale={ id:nextId(), date:today(), productId:o.productId||"", itemName: prod?"":nm,
+      qty, price, discount:0, gstRate:0, costAtSale: prod?(Number(prod.cost)||0):0, channel:"",
+      customer:(o.customer||"").trim(), staff:"Staff", payStatus:o.payStatus||"Paid",
+      paid:(o.payStatus==="Due"?0:total), notes:"", updatedAt:nowISO() };
+    DATA.sales.push(sale); adjustStock(sale.productId, -qty); maybeAddCustomer(sale.customer); save();
+    closeModal(); toast("Sale recorded","ok"); renderStaffHome();
+  },"Save sale","Record Sale");
 }
 
 // Live cross-device updates: when another phone writes, pull + re-render.
