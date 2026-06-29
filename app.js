@@ -68,6 +68,11 @@ function normalize(d){
       if(pr) pp.itemName = pr.name;
     }
   });
+  // Per-location stock: split a legacy single-pool product into Store (its existing stock) + Warehouse (0).
+  out.products.forEach(p=>{
+    if(p.stockStore==null && p.stockWh==null){ p.stockStore=Number(p.stock)||0; p.stockWh=0; }
+    p.stock=(Number(p.stockStore)||0)+(Number(p.stockWh)||0);
+  });
   return out;
 }
 let DATA = load();
@@ -262,7 +267,14 @@ function toast(msg,type=""){
 
 /* ---------- Derived calculations ---------- */
 function productById(id){ return DATA.products.find(p=>p.id===id); }
-function stockOf(p){ return Number(p.stock)||0; }
+function stockOf(p){
+  if(p.stockStore!=null || p.stockWh!=null) return (Number(p.stockStore)||0)+(Number(p.stockWh)||0);
+  return Number(p.stock)||0;   // legacy single-pool product
+}
+function stockAt(p, loc){   // loc: "store" | "wh"
+  if(p.stockStore!=null || p.stockWh!=null) return loc==="wh" ? (Number(p.stockWh)||0) : (Number(p.stockStore)||0);
+  return loc==="wh" ? 0 : (Number(p.stock)||0);   // legacy stock lives in Store
+}
 function prodLabel(p){ return p ? (p.name + (p.color ? " · " + p.color : "")) : ""; }
 function stockValue(){ return DATA.products.reduce((s,p)=>s+Math.max(0,stockOf(p))*(Number(p.cost)||0),0); }
 function lowStockProducts(){
@@ -1181,6 +1193,8 @@ function productGroups(rows){
   });
   return [...map.values()].map(g=>{
     g.stock = g.variants.reduce((s,v)=>s+stockOf(v),0);
+    g.store = g.variants.reduce((s,v)=>s+stockAt(v,"store"),0);
+    g.wh = g.variants.reduce((s,v)=>s+stockAt(v,"wh"),0);
     g.value = g.variants.reduce((s,v)=>s+Math.max(0,stockOf(v))*(Number(v.cost)||0),0);
     g.reorder = Number(g.variants[0].reorder)||DATA.settings.lowStockDefault;
     return g;
@@ -1197,6 +1211,7 @@ function drawInventory(){
     {label:"Category",render:g=>esc(g.category||"—")},
     {label:"Colours",render:g=>g.variants.length>1?`<span class="badge">${num(g.variants.length)} colours</span>`:esc((g.variants[0].color)||"—")},
     {label:"In stock",num:true,render:g=>`<span class="badge ${g.stock<=g.reorder?"low":"ok"}">${num(g.stock)}</span>`},
+    {label:"Store · WH",num:true,render:g=>`<span class="muted-sm">${num(g.store)} · ${num(g.wh)}</span>`},
     {label:"Stock value",num:true,render:g=>money(g.value)},
     {label:"",render:g=>`<div class="row-actions">
       <button class="icon-btn" onclick="openProductGroup('${encodeURIComponent(g.key)}')" title="View colours & stock">👁️</button>
@@ -1212,15 +1227,15 @@ window.openProductGroup=(encKey)=>{
   if(!g){ toast("Product not found","err"); return; }
   const vs=[...g.variants].sort((a,b)=>(a.color||"").localeCompare(b.color||""));
   const body=vs.map(v=>{
-    const low=stockOf(v)<=(Number(v.reorder)||DATA.settings.lowStockDefault);
-    const m=(Number(v.price)||0)-(Number(v.cost)||0);
+    const tot=stockOf(v), low=tot<=(Number(v.reorder)||DATA.settings.lowStockDefault);
     return `<tr>
       <td>${esc(v.color||"—")}</td>
-      <td class="num"><span class="badge ${low?"low":"ok"}">${num(stockOf(v))}</span></td>
-      <td class="num">${money(v.cost)}</td>
+      <td class="num">${num(stockAt(v,"store"))}</td>
+      <td class="num">${num(stockAt(v,"wh"))}</td>
+      <td class="num"><span class="badge ${low?"low":"ok"}">${num(tot)}</span></td>
       <td class="num">${money(v.price)}</td>
-      <td class="num"><span class="${m>=0?"pos":"neg"}">${money(m)}</span></td>
-      <td class="num"><button class="icon-btn" onclick="closeModal();editRow('product','${v.id}')" title="Edit">✏️</button>
+      <td class="num"><button class="icon-btn" onclick="transferForm('${v.id}','${encodeURIComponent(key)}')" title="Transfer store⇄warehouse">⇄</button>
+        <button class="icon-btn" onclick="closeModal();editRow('product','${v.id}')" title="Edit">✏️</button>
         <button class="icon-btn del" onclick="delProductVariant('${v.id}','${encodeURIComponent(key)}')" title="Delete colour">🗑️</button></td></tr>`;
   }).join("");
   const brand=(g.variants.find(v=>v.brand)||{}).brand||"";
@@ -1228,10 +1243,12 @@ window.openProductGroup=(encKey)=>{
     <div class="detail-meta">
       ${brand?`<div><span>Brand</span><b>${esc(brand)}</b></div>`:""}
       <div><span>Colours</span><b>${num(g.variants.length)}</b></div>
-      <div><span>Total pieces</span><b>${num(g.stock)}</b></div>
+      <div><span>Store</span><b>${num(g.store)}</b></div>
+      <div><span>Warehouse</span><b>${num(g.wh)}</b></div>
+      <div><span>Total</span><b>${num(g.stock)}</b></div>
       <div><span>Stock value</span><b>${money(g.value)}</b></div>
     </div>
-    <table class="detail-table"><thead><tr><th>Colour</th><th class="num">Pieces</th><th class="num">Cost</th><th class="num">Sell</th><th class="num">Margin</th><th></th></tr></thead>
+    <table class="detail-table"><thead><tr><th>Colour</th><th class="num">Store</th><th class="num">WH</th><th class="num">Total</th><th class="num">Sell</th><th></th></tr></thead>
     <tbody>${body}</tbody></table>
     <div class="form-actions">
       <button class="btn btn-ghost" onclick="closeModal()">Close</button>
@@ -1239,6 +1256,20 @@ window.openProductGroup=(encKey)=>{
     </div>`);
 };
 window.addColour=(encName)=>{ productForm(null,{name:decodeURIComponent(encName)}); };
+// Move stock between Store and Warehouse for one colour variant.
+window.transferForm=(id,encKey)=>{
+  const p=productById(id); if(!p) return;
+  buildForm([
+    {name:"dir",label:"Direction",type:"select",value:"wh2store",options:[{value:"wh2store",label:"Warehouse → Store"},{value:"store2wh",label:"Store → Warehouse"}]},
+    {name:"qty",label:`Quantity to move (Store ${stockAt(p,"store")} · Warehouse ${stockAt(p,"wh")})`,type:"number",step:"1",value:1,required:true}
+  ],(o)=>{
+    const qty=Number(o.qty)||0; if(!(qty>0)){ toast("Enter a quantity greater than 0","err"); return; }
+    if(o.dir==="store2wh") transferStock(id,"store","wh",qty); else transferStock(id,"wh","store",qty);
+    save(); closeModal(); toast("Stock transferred","ok");
+    if(encKey) openProductGroup(encKey);
+    if(currentView==="inventory") drawInventory();
+  },"Transfer","Transfer stock");
+};
 // Delete a whole product (all its colour variants) straight from the Inventory list.
 window.deleteProductGroup=(encKey)=>{
   const key=decodeURIComponent(encKey);
@@ -1277,12 +1308,13 @@ function productForm(id, preset){
     {name:"color",label:"Colour",type:"combo",value:p.color,options:colourOpts,placeholder:"e.g. Red (optional)"},
     {name:"cost",label:"Cost price (per unit)",type:"number",value:p.cost},
     {name:"price",label:"Selling price (per unit)",type:"number",value:p.price},
-    {name:"stock",label:"Current stock qty",type:"number",step:"1",value:p.stock},
+    {name:"stockStore",label:"Store qty",type:"number",step:"1",value:stockAt(p,"store")},
+    {name:"stockWh",label:"Warehouse qty",type:"number",step:"1",value:stockAt(p,"wh")},
     {name:"reorder",label:"Low-stock alert at",type:"number",step:"1",value:p.reorder},
     {name:"supplier",label:"Default supplier",type:"select",value:p.supplier,options:DATA.suppliers.map(s=>s.name),placeholder:"Select",addable:"suppliers"}
   ],(o)=>{
     if(!o.name||!o.name.trim()){ toast("Enter a product name","err"); return; }
-    o.cost=Number(o.cost)||0;o.price=Number(o.price)||0;o.stock=Number(o.stock)||0;o.reorder=Number(o.reorder)||0;
+    o.cost=Number(o.cost)||0;o.price=Number(o.price)||0;o.stockStore=Number(o.stockStore)||0;o.stockWh=Number(o.stockWh)||0;o.stock=o.stockStore+o.stockWh;o.reorder=Number(o.reorder)||0;
     o.updatedAt=nowISO();
     if(id) Object.assign(productById(id),o);
     else { o.id=nextId(); DATA.products.push(o); }
@@ -1300,6 +1332,7 @@ function productBulkForm(){
   openModal("Add Inventory",`
     <datalist id="ivBrandL">${brandL}</datalist><datalist id="ivColourL">${colourL}</datalist><datalist id="ivModelL">${modelL}</datalist>
     <form id="ivForm" autocomplete="off">
+      <div class="form-grid"><div class="field"><label>Add stock to</label><select name="loc"><option value="wh">Warehouse</option><option value="store">Store</option></select></div></div>
       <div class="po-sec-label">Models &amp; colours</div>
       <div id="ivModels"></div>
       <button type="button" class="btn btn-sm" id="ivAddModel">➕ Add another model</button>
@@ -1339,18 +1372,28 @@ function productBulkForm(){
       b.querySelectorAll(".po-crow").forEach(r=>{ const color=(r.querySelector(".po-color").value||"").trim(), qty=Number(r.querySelector(".po-cqty").value)||0; if(qty>0) items.push({brand,model,color,cost,price,qty}); });
     });
     if(!items.length){ toast("Add at least one model with a colour & quantity","err"); return; }
+    const loc=f.loc.value==="store"?"store":"wh";
     items.forEach(it=>{
       let p=DATA.products.find(x=>(x.name||"").toLowerCase()===it.model.toLowerCase() && (x.color||"").toLowerCase()===it.color.toLowerCase());
-      if(p){ p.stock=(Number(p.stock)||0)+it.qty; if(it.cost>0)p.cost=it.cost; if(it.price>0)p.price=it.price; if(it.brand&&!p.brand)p.brand=it.brand; p.updatedAt=ts; }
-      else { p={id:nextId(),name:it.model,brand:it.brand,color:it.color,category:"",sku:"",cost:it.cost,price:it.price,stock:it.qty,reorder:DATA.settings.lowStockDefault,supplier:"",updatedAt:ts}; DATA.products.push(p); }
+      if(p){ ensureLoc(p); if(loc==="wh") p.stockWh=(Number(p.stockWh)||0)+it.qty; else p.stockStore=(Number(p.stockStore)||0)+it.qty; p.stock=(Number(p.stockStore)||0)+(Number(p.stockWh)||0); if(it.cost>0)p.cost=it.cost; if(it.price>0)p.price=it.price; if(it.brand&&!p.brand)p.brand=it.brand; p.updatedAt=ts; }
+      else { p={id:nextId(),name:it.model,brand:it.brand,color:it.color,category:"",sku:"",cost:it.cost,price:it.price,stockStore:loc==="store"?it.qty:0,stockWh:loc==="wh"?it.qty:0,stock:it.qty,reorder:DATA.settings.lowStockDefault,supplier:"",updatedAt:ts}; DATA.products.push(p); }
     });
-    save(); closeModal(); toast(`${items.length} item(s) added to inventory`,"ok");
+    save(); closeModal(); toast(`${items.length} item(s) added to ${loc==="wh"?"warehouse":"store"}`,"ok");
     if(currentView==="inventory") drawInventory(); else go(currentView);
   };
 }
-function adjustStock(productId, delta){
-  const p=productById(productId);
-  if(p){ p.stock=(Number(p.stock)||0)+delta; p.updatedAt=nowISO(); }
+function ensureLoc(p){ if(p.stockStore==null && p.stockWh==null){ p.stockStore=Number(p.stock)||0; p.stockWh=0; } }
+function adjustStock(productId, delta, loc){
+  const p=productById(productId); if(!p) return;
+  ensureLoc(p);
+  if(loc==="wh") p.stockWh=(Number(p.stockWh)||0)+delta; else p.stockStore=(Number(p.stockStore)||0)+delta;
+  p.stock=(Number(p.stockStore)||0)+(Number(p.stockWh)||0);   // keep mirror total in sync
+  p.updatedAt=nowISO();
+}
+function transferStock(productId, from, to, qty){
+  const p=productById(productId); if(!p||!(qty>0)) return;
+  ensureLoc(p);
+  adjustStock(productId, -qty, from); adjustStock(productId, +qty, to);
 }
 
 /* ---------- Invoice / bill ---------- */
@@ -2049,8 +2092,8 @@ window.approveItem=async (id)=>{
   const name=(a.model||"Item").trim();
   const colour=(a.colour||"").trim();
   let p=DATA.products.find(x=>(x.name||"").toLowerCase()===name.toLowerCase() && (x.color||"").toLowerCase()===colour.toLowerCase());
-  if(p){ p.stock=(Number(p.stock)||0)+(Number(a.qty)||0); if(Number(a.price)>0) p.price=Number(a.price); if(cost>0) p.cost=cost; if(a.brand && !p.brand) p.brand=(a.brand||"").trim(); p.updatedAt=nowISO(); }
-  else { p={id:nextId(),name,brand:(a.brand||"").trim(),color:colour,category:"",sku:"",cost,price:Number(a.price)||0,stock:Number(a.qty)||0,reorder:DATA.settings.lowStockDefault,supplier:"",updatedAt:nowISO()}; DATA.products.push(p); }
+  if(p){ ensureLoc(p); p.stockWh=(Number(p.stockWh)||0)+(Number(a.qty)||0); p.stock=(Number(p.stockStore)||0)+(Number(p.stockWh)||0); if(Number(a.price)>0) p.price=Number(a.price); if(cost>0) p.cost=cost; if(a.brand && !p.brand) p.brand=(a.brand||"").trim(); p.updatedAt=nowISO(); }
+  else { p={id:nextId(),name,brand:(a.brand||"").trim(),color:colour,category:"",sku:"",cost,price:Number(a.price)||0,stockStore:0,stockWh:Number(a.qty)||0,stock:Number(a.qty)||0,reorder:DATA.settings.lowStockDefault,supplier:"",updatedAt:nowISO()}; DATA.products.push(p); }
   a.status="approved"; a.updatedAt=nowISO(); save();
   toast("Approved — added to inventory","ok"); drawApprovals();
 };
