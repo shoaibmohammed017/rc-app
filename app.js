@@ -1264,6 +1264,8 @@ window.transferForm=(id,encKey)=>{
     {name:"qty",label:`Quantity to move (Store ${stockAt(p,"store")} · Warehouse ${stockAt(p,"wh")})`,type:"number",step:"1",value:1,required:true}
   ],(o)=>{
     const qty=Number(o.qty)||0; if(!(qty>0)){ toast("Enter a quantity greater than 0","err"); return; }
+    const avail = o.dir==="store2wh" ? stockAt(p,"store") : stockAt(p,"wh");
+    if(qty>avail){ toast(`Only ${avail} in ${o.dir==="store2wh"?"Store":"Warehouse"}`,"err"); return; }
     if(o.dir==="store2wh") transferStock(id,"store","wh",qty); else transferStock(id,"wh","store",qty);
     save(); closeModal(); toast("Stock transferred","ok");
     if(encKey) openProductGroup(encKey);
