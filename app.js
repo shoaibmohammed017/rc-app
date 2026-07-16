@@ -44,6 +44,36 @@ const CLOUD = SYNC && !!(window.supabase && CFG.SUPABASE_URL && CFG.SUPABASE_KEY
 let sb = null;
 if (CLOUD) { try { sb = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_KEY); } catch(e){ console.warn("Supabase init failed", e); } }
 
+/* ---------- Shiprocket ONLINE ORDERS (separate table; app reads, server writes) ---------- */
+let ONLINE_ORDERS = [];
+let onlineSyncedAt = "";
+let onlineSyncing = false;
+async function loadOnlineOrders(){
+  if(!CLOUD || !sb) return false;
+  try{
+    const { data, error } = await sb.from("online_orders").select("*");
+    if(error){ /* table not created yet or unreachable — keep app working */ return false; }
+    ONLINE_ORDERS = Array.isArray(data) ? data : [];
+    onlineSyncedAt = ONLINE_ORDERS.reduce((mx,o)=>(o.synced_at&&o.synced_at>mx)?o.synced_at:mx,"");
+    return true;
+  }catch(e){ return false; }
+}
+// Trigger the serverless importer, then reload. silent=true suppresses toasts (background use).
+async function syncOnline(silent){
+  if(onlineSyncing) return false;
+  onlineSyncing = true;
+  try{
+    const res = await fetch("/api/sync-orders", { method:"POST" });
+    let j = {}; try{ j = await res.json(); }catch(_){}
+    if(!res.ok || !j.ok){ if(!silent) toast(j.error ? ("Sync: "+j.error) : "Sync failed","err"); return false; }
+    if(j.throttled){ if(!silent) toast("Already up to date","ok"); return true; }
+    await loadOnlineOrders();
+    if(!silent) toast(`Synced ${j.upserted||0} online order(s)`,"ok");
+    return true;
+  }catch(e){ if(!silent) toast("Sync failed — check connection","err"); return false; }
+  finally{ onlineSyncing = false; }
+}
+
 /* ---------- Storage ---------- */
 const COLLECTIONS = ["products","sales","purchases","expenses","customers","suppliers","staff","users","approvals"];
 function normalize(d){
@@ -558,14 +588,33 @@ function isOnline(s){
   const off = DATA.settings.offlineChannels || ["Shop / Walk-in","Exhibition","Store","Walk-in","Counter"];
   return !off.includes(ch);
 }
+/* ---- Shiprocket online-order helpers (money in ₹, date as order_ymd YYYY-MM-DD) ---- */
+function onlineInPeriod(){
+  const r = periodRange(selectedPeriod);
+  return ONLINE_ORDERS.filter(o=>{ const d=o.order_ymd||""; if(!d) return false; if(r.from && d<r.from) return false; if(r.to && d>r.to) return false; return true; });
+}
+function onlineSales(list){ return (list||ONLINE_ORDERS).filter(o=>!o.is_cancelled && !o.is_rto); }  // booked online sales (drop cancelled + returned/RTO)
+function orderVal(o){ return Number(o.total)||0; }
+// COD still owed to us = COD, not cancelled, not returned (RTO). Shiprocket remits this ~8–9 days after delivery.
+function codOnTheWay(){ return ONLINE_ORDERS.filter(o=>o.payment_method==="cod" && !o.is_cancelled && !o.is_rto); }
+function onlineChannelLabel(o){ const c=(o.channel_order_id||""); if(/^PRC-/i.test(c)) return "Website"; return (o.channel_name && !/custom/i.test(o.channel_name)) ? o.channel_name : "Online"; }
+function fmtWhen(iso){ try{ const d=new Date(iso); if(isNaN(d.getTime())) return ""; return d.toLocaleString("en-IN",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}); }catch(e){ return ""; } }
 function renderDashboard(){
   const c = $("#content");
   const R = periodRange(selectedPeriod);
-  const sales = inPeriod(DATA.sales), purchases = inPeriod(DATA.purchases), expenses = inPeriod(DATA.expenses);
-  const salesTot = sumBy(sales, saleTotal);
+  const allSales     = inPeriod(DATA.sales);
+  const storeSales   = allSales.filter(s=>!isOnline(s));             // in-store / walk-in
+  const manualOnline = allSales.filter(isOnline);                    // WhatsApp/Instagram/etc. entered by hand (not via Shiprocket)
+  const purchases = inPeriod(DATA.purchases), expenses = inPeriod(DATA.expenses);
+  const shipOnline = onlineSales(onlineInPeriod());                  // Shiprocket orders in period (excl. cancelled + returned)
+  const sales    = allSales;                                         // charts/lists use every manual sale (store + manual online)
+  const storeTot = sumBy(storeSales, saleTotal);
+  const onlineTot= sumBy(manualOnline, saleTotal) + sumBy(shipOnline, orderVal);
+  const salesTot = storeTot + onlineTot;
   const purTot   = sumBy(purchases, purchaseTotal);
   const expTot   = sumBy(expenses, e=>e.amount);
-  const codPending = sumBy(DATA.sales.filter(isOnline), saleDue);   // online money still owed = COD on the way (all-time)
+  // Money still on the way = Shiprocket COD owed + any manual online sale not yet paid
+  const codPending = sumBy(codOnTheWay(), orderVal) + sumBy(DATA.sales.filter(s=>isOnline(s)&&saleDue(s)>0), saleDue);
   const low = lowStockProducts();
 
   const chips=[["today","Today"],["thisMonth","This month"],["lastMonth","Last month"],["last7","Last 7 days"],["last6m","Last 6 months"],["thisYear","This year"],["custom","Custom"]];
@@ -576,11 +625,12 @@ function renderDashboard(){
     html += `<div class="form-grid" style="margin:0 0 14px"><div class="field"><label>From</label><input type="date" id="pcFrom" value="${customRange.from||""}"></div><div class="field"><label>To</label><input type="date" id="pcTo" value="${customRange.to||""}"></div></div>`;
   }
   html += `<div class="kpi-grid">
-    ${K("green","psales","Total Sales",money(salesTot),`${esc(R.label)} · ${sales.length} sale(s)`)}
+    ${K("green","psales","Total Sales",money(salesTot),`🏪 ${money(storeTot)} · 🌐 ${money(onlineTot)}`)}
     ${K("amber","ppurchases","Stock Purchases",money(purTot),`${esc(R.label)} · ${purchases.length}`)}
     ${K("red","pexpenses","Expenses",money(expTot),`${esc(R.label)} · ${expenses.length}`)}
   </div>`;
   html += `<div class="kpi cod-card kpi-click" data-kpi="cod" role="button" tabindex="0"><div class="kpi-label">🚚 COD money on the way</div><div class="kpi-value">${money(codPending)}</div><div class="kpi-sub">Shiprocket will pay this into your account · tap to see ›</div></div>`;
+  html += `<div class="sync-bar"><button class="btn btn-sm" id="syncOnlineBtn">🔄 Sync online orders</button><span class="sync-note" id="syncNote"></span></div>`;
   if(low.length){
     html += `<div class="alert">⚠️ <strong>${low.length}</strong> item(s) low on stock: ${low.slice(0,4).map(p=>esc(p.name)).join(", ")}${low.length>4?"…":""}</div>`;
   }
@@ -620,6 +670,10 @@ function renderDashboard(){
   // period chips → change window & re-render
   $$(".pchip").forEach(b=>b.onclick=()=>{ buzz(); selectedPeriod=b.dataset.period; try{localStorage.setItem("rc_period",selectedPeriod);}catch(e){} renderDashboard(); });
   ["pcFrom","pcTo"].forEach(id=>{ const el=$("#"+id); if(el) el.onchange=()=>{ customRange={from:($("#pcFrom").value||""),to:($("#pcTo").value||"")}; renderDashboard(); }; });
+  // Online-orders sync (Shiprocket)
+  const syncBtn=$("#syncOnlineBtn"), syncNote=$("#syncNote");
+  if(syncNote) syncNote.textContent = onlineSyncedAt ? ("Last synced "+fmtWhen(onlineSyncedAt)) : "Not synced yet — tap to pull Shiprocket orders";
+  if(syncBtn) syncBtn.onclick=async ()=>{ buzz(); syncBtn.disabled=true; const old=syncBtn.textContent; syncBtn.textContent="⏳ Syncing…"; const ok=await syncOnline(false); syncBtn.disabled=false; syncBtn.textContent=old; if(ok && currentView==="dashboard") renderDashboard(); };
 
   // Current month chart — week-by-week revenue vs spending
   const mk = monthKey(today());
@@ -630,6 +684,7 @@ function renderDashboard(){
   const weekCount = Math.ceil(daysInMonth/7);
   const wkRev = Array(weekCount).fill(0), wkSpend = Array(weekCount).fill(0);
   DATA.sales.filter(s=>monthKey(s.date)===mk).forEach(s=>{ wkRev[weekOf(s.date)] += saleTotal(s); });
+  onlineSales(ONLINE_ORDERS).filter(o=>monthKey(o.order_ymd)===mk).forEach(o=>{ wkRev[weekOf(o.order_ymd)] += orderVal(o); });
   DATA.expenses.filter(e=>monthKey(e.date)===mk).forEach(e=>{ wkSpend[weekOf(e.date)] += Number(e.amount)||0; });
   DATA.purchases.filter(p=>monthKey(p.date)===mk).forEach(p=>{ wkSpend[weekOf(p.date)] += purchaseTotal(p); });
   const maxv = Math.max(1,...wkRev,...wkSpend);
@@ -675,7 +730,8 @@ function renderDashboard(){
 
   // Channel chart
   const byCh = {};
-  sales.forEach(s=>{ const ch=s.channel||"Other"; byCh[ch]=(byCh[ch]||0)+saleTotal(s); });
+  sales.forEach(s=>{ const ch=s.channel||"Store"; byCh[ch]=(byCh[ch]||0)+saleTotal(s); });
+  shipOnline.forEach(o=>{ const ch=onlineChannelLabel(o); byCh[ch]=(byCh[ch]||0)+orderVal(o); });
   const chArr = Object.entries(byCh).sort((a,b)=>b[1]-a[1]);
   const maxc = Math.max(1,...chArr.map(c=>c[1]));
   $("#channelChart").innerHTML = chArr.length? chArr.map(([n,v])=>`
@@ -705,23 +761,33 @@ window.openKpiDetail=(key)=>{
   let title="", body="";
 
   if(key==="psales"){
-    const ps=inPeriod(DATA.sales), R=periodRange(selectedPeriod);
-    const online=ps.filter(isOnline), offline=ps.filter(s=>!isOnline(s));
-    const onTot=sumBy(online,saleTotal), offTot=sumBy(offline,saleTotal);
-    const prepaid=sumBy(online,s=>Number(s.paid)||0), codDue=sumBy(online,saleDue);
-    const byCh=groupSum(ps, s=>s.channel||"—", saleTotal);
-    const recent=[...ps].sort((a,b)=>(b.date||"").localeCompare(a.date||"")).slice(0,8);
+    const R=periodRange(selectedPeriod);
+    const store=inPeriod(DATA.sales).filter(s=>!isOnline(s));
+    const manual=inPeriod(DATA.sales).filter(isOnline);            // manual online (WhatsApp/Instagram, not via Shiprocket)
+    const on=onlineSales(onlineInPeriod());                        // Shiprocket, excl. cancelled + returned
+    const storeTot=sumBy(store,saleTotal);
+    const manualTot=sumBy(manual,saleTotal);
+    const shipTot=sumBy(on,orderVal);
+    const onlineTot=manualTot+shipTot;
+    const shipPrepaid=sumBy(on.filter(o=>o.payment_method!=="cod"),orderVal);
+    const shipCod=sumBy(on.filter(o=>o.payment_method==="cod"),orderVal);
+    const delivered=on.filter(o=>o.is_delivered).length;
+    const transit=Math.max(0, on.length-delivered);               // `on` excludes RTO, so delivered + transit partition it
+    const rto=onlineInPeriod().filter(o=>!o.is_cancelled && o.is_rto).length;
+    const recent=[...on].sort((a,b)=>(b.order_ymd||"").localeCompare(a.order_ymd||"")).slice(0,8);
     title="Sales — "+R.label;
-    body = statRow("Total sales", money(sumBy(ps,saleTotal)), true)
-      + statRow("Number of sales", num(ps.length))
-      + sec("Online vs Store")
-      + statRow("🌐 Online sales — "+num(online.length), money(onTot), true)
-      + statRow("   • Prepaid (received)", money(prepaid))
-      + statRow("   • COD (on the way)", money(codDue))
-      + statRow("🏪 Store / walk-in — "+num(offline.length), money(offTot), true)
-      + sec("By channel") + (byCh.length?byCh.map(([n,v])=>statRow(n,money(v))).join(""):emptyLine())
-      + sec("Recent sales")
-      + kpiList(recent.map(s=>({main:esc((productById(s.productId)||{}).name||s.itemName||"Item")+" ×"+num(s.qty), sub:fmtDate(s.date)+" · "+esc(s.channel||"Store")+(s.customer?" · "+esc(s.customer):""), val:money(saleTotal(s)), cls:"pos"})), "No sales in this period");
+    body = statRow("Total sales", money(storeTot+onlineTot), true)
+      + statRow("Number of sales", num(store.length+manual.length+on.length))
+      + sec("🏪 Store / walk-in")
+      + statRow("Store sales — "+num(store.length), money(storeTot), true)
+      + sec("🌐 Online")
+      + statRow("Online sales — "+num(manual.length+on.length), money(onlineTot), true)
+      + statRow("   • Shiprocket prepaid (in account)", money(shipPrepaid))
+      + statRow("   • Shiprocket COD (remits later)", money(shipCod))
+      + (manualTot>0?statRow("   • Other online (WhatsApp etc.)", money(manualTot)):"")
+      + statRow("   • Delivered / In transit / Returned", num(delivered)+" / "+num(transit)+" / "+num(rto))
+      + sec("Recent online orders")
+      + kpiList(recent.map(o=>({main:esc(o.customer_name||"Customer")+" · "+esc(o.channel_order_id||""), sub:fmtDate(o.order_ymd)+" · "+esc(o.status||"")+" · "+(o.payment_method==="cod"?"COD":"Prepaid"), val:money(orderVal(o)), cls:"pos"})), on.length?"":"No Shiprocket orders in this period — tap “Sync online orders” on Home");
   }
   else if(key==="ppurchases"){
     const pp=inPeriod(DATA.purchases), R=periodRange(selectedPeriod);
@@ -746,13 +812,23 @@ window.openKpiDetail=(key)=>{
       + kpiList(recent.map(e=>({main:esc(e.category||"Expense"), sub:fmtDate(e.date)+" · "+esc(e.staff||""), val:money(e.amount), cls:"neg"})), "No expenses in this period");
   }
   else if(key==="cod"){
-    const codOrders=DATA.sales.filter(s=>isOnline(s)&&saleDue(s)>0).sort((a,b)=>saleDue(b)-saleDue(a));
+    const cod=codOnTheWay().sort((a,b)=>orderVal(b)-orderVal(a));
+    const delivered=cod.filter(o=>o.is_delivered), transit=cod.filter(o=>!o.is_delivered);
+    const manualDue=DATA.sales.filter(s=>isOnline(s)&&saleDue(s)>0).sort((a,b)=>saleDue(b)-saleDue(a));
+    const manualDueTot=sumBy(manualDue,saleDue);
     title="COD money on the way";
-    body = statRow("Total on the way", money(sumBy(codOrders,saleDue)), true)
-      + statRow("Open COD orders", num(codOrders.length))
-      + `<div class="kpi-note">Money customers paid the courier (Shiprocket) — it reaches your bank about 8–9 days after delivery. When you receive it, edit that sale to <b>Paid</b> and it leaves this list.</div>`
+    const rows=[
+      ...cod.map(o=>({main:esc(o.customer_name||"Customer")+" · "+esc(o.channel_order_id||""), sub:fmtDate(o.order_ymd)+" · "+esc(o.status||"")+(o.customer_city?" · "+esc(o.customer_city):""), val:money(orderVal(o)), cls:"neg"})),
+      ...manualDue.map(s=>({main:esc(s.customer||"Customer")+" · "+esc(s.channel||"Online"), sub:fmtDate(s.date)+" · unpaid", val:money(saleDue(s)), cls:"neg"}))
+    ];
+    body = statRow("Total on the way", money(sumBy(cod,orderVal)+manualDueTot), true)
+      + statRow("Open COD orders", num(cod.length+manualDue.length))
+      + statRow("   • Delivered (awaiting remittance)", money(sumBy(delivered,orderVal)))
+      + statRow("   • Still in transit", money(sumBy(transit,orderVal)))
+      + (manualDueTot>0?statRow("   • Other online unpaid (WhatsApp etc.)", money(manualDueTot)):"")
+      + `<div class="kpi-note">Cash your customers pay the courier. Shiprocket remits it to your bank about 8–9 days after delivery. Cancelled and returned (RTO) orders are excluded automatically.</div>`
       + sec("Orders")
-      + kpiList(codOrders.map(s=>({main:esc(s.customer||"Customer")+" — "+esc((productById(s.productId)||{}).name||s.itemName||"Item"), sub:fmtDate(s.date)+" · "+esc(s.channel||""), val:money(saleDue(s)), cls:"neg", go:"sales"})), "No COD money pending 🎉");
+      + kpiList(rows, "No COD money pending 🎉");
   }
   else if(key==="revenue"){
     title="Total Revenue";
@@ -2089,7 +2165,7 @@ async function init(){
   if(CLOUD){
     window.addEventListener("focus", async ()=>{
       if(currentUser && !$("#modalOverlay").classList.contains("open")){
-        await fetchCloud(); if(currentView) go(currentView);
+        await fetchCloud(); await loadOnlineOrders(); if(currentView) go(currentView);
       }
     });
   }
@@ -2112,8 +2188,11 @@ async function enterApp(){
   $("#loginScreen").classList.remove("open");
   if(CLOUD){
     await fetchCloud();
+    await loadOnlineOrders();
     autoBackup();
     setupRealtime();
+    // pull fresh Shiprocket orders in the background, then refresh Home if it's showing (and no modal open)
+    syncOnline(true).then(ok=>{ if(ok && currentView==="dashboard" && !$("#modalOverlay").classList.contains("open")) renderDashboard(); });
   }
   if(staffMode) startStaff(); else startApp();
 }
