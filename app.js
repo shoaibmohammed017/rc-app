@@ -51,10 +51,13 @@ let onlineSyncing = false;
 async function loadOnlineOrders(){
   if(!CLOUD || !sb) return false;
   try{
-    const { data, error } = await sb.from("online_orders").select("*");
-    if(error){ /* table not created yet or unreachable — keep app working */ return false; }
-    ONLINE_ORDERS = Array.isArray(data) ? data : [];
-    onlineSyncedAt = ONLINE_ORDERS.reduce((mx,o)=>(o.synced_at&&o.synced_at>mx)?o.synced_at:mx,"");
+    // Online orders live in a separate row of business_state (id='online_orders'),
+    // { orders:[...], synced_at }. Kept apart from the 'main' business blob.
+    const { data, error } = await sb.from("business_state").select("data").eq("id","online_orders").maybeSingle();
+    if(error){ return false; }
+    const d = (data && data.data) || {};
+    ONLINE_ORDERS = Array.isArray(d.orders) ? d.orders : [];
+    onlineSyncedAt = d.synced_at || "";
     return true;
   }catch(e){ return false; }
 }
@@ -818,7 +821,10 @@ window.openKpiDetail=(key)=>{
     const manualDueTot=sumBy(manualDue,saleDue);
     title="COD money on the way";
     const rows=[
-      ...cod.map(o=>({main:esc(o.customer_name||"Customer")+" · "+esc(o.channel_order_id||""), sub:fmtDate(o.order_ymd)+" · "+esc(o.status||"")+(o.customer_city?" · "+esc(o.customer_city):""), val:money(orderVal(o)), cls:"neg"})),
+      ...cod.map(o=>{
+        const rem = o.is_delivered ? (o.remittance_to ? (" · 💰 expected by "+esc(String(o.remittance_to))) : " · 💰 awaiting remittance") : "";
+        return {main:esc(o.customer_name||"Customer")+" · "+esc(o.channel_order_id||""), sub:fmtDate(o.order_ymd)+" · "+esc(o.status||"")+rem+(o.customer_city?" · "+esc(o.customer_city):""), val:money(orderVal(o)), cls:"neg"};
+      }),
       ...manualDue.map(s=>({main:esc(s.customer||"Customer")+" · "+esc(s.channel||"Online"), sub:fmtDate(s.date)+" · unpaid", val:money(saleDue(s)), cls:"neg"}))
     ];
     body = statRow("Total on the way", money(sumBy(cod,orderVal)+manualDueTot), true)
@@ -2362,8 +2368,10 @@ function setupRealtime(){
   if(!CLOUD || !sb || realtimeOn) return;
   try{
     sb.channel("biz")
-      .on("postgres_changes", { event:"*", schema:"public", table:"business_state" }, async ()=>{
+      .on("postgres_changes", { event:"*", schema:"public", table:"business_state" }, async (payload)=>{
         if($("#modalOverlay").classList.contains("open")) return; // don't disrupt an open form
+        const rowId = (payload && payload.new && payload.new.id) || (payload && payload.old && payload.old.id);
+        if(rowId === "online_orders"){ await loadOnlineOrders(); if(currentView) go(currentView); return; }
         const changed = await fetchCloud();
         if(changed && currentView) go(currentView);
       })
