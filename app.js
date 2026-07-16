@@ -533,47 +533,58 @@ function payBadge(status){
 /* ============================================================
    DASHBOARD
    ============================================================ */
+/* ---------- Period filter (drives the whole Home) ---------- */
+let selectedPeriod = (function(){ try{ return localStorage.getItem("rc_period"); }catch(e){ return null; } })() || "thisMonth";
+let customRange = { from:"", to:"" };
+function periodRange(p){
+  const t = today();
+  const d = new Date(t + "T00:00:00");
+  const y = d.getFullYear(), m = d.getMonth();
+  const ymd = (yy,mm,dd)=>`${yy}-${String(mm+1).padStart(2,"0")}-${String(dd).padStart(2,"0")}`;
+  const mon = dt => dt.toLocaleDateString("en-IN",{month:"long",year:"numeric"});
+  if(p==="today")     return { from:t, to:t, label:"Today" };
+  if(p==="lastMonth"){ const s=new Date(y,m-1,1), last=new Date(y,m,0).getDate(); return { from:ymd(s.getFullYear(),s.getMonth(),1), to:ymd(s.getFullYear(),s.getMonth(),last), label:mon(s) }; }
+  if(p==="last7"){ const s=new Date(d); s.setDate(s.getDate()-6); return { from:ymd(s.getFullYear(),s.getMonth(),s.getDate()), to:t, label:"Last 7 days" }; }
+  if(p==="last6m"){ const s=new Date(y,m-5,1); return { from:ymd(s.getFullYear(),s.getMonth(),1), to:t, label:"Last 6 months" }; }
+  if(p==="thisYear") return { from:`${y}-01-01`, to:t, label:String(y) };
+  if(p==="custom")   return { from:customRange.from||"", to:customRange.to||"", label:"Custom range" };
+  return { from:ymd(y,m,1), to:t, label:mon(d) };   // thisMonth (default)
+}
+function inPeriod(arr){ const r=periodRange(selectedPeriod); return rangeFilter(arr, r.from, r.to); }
+// A sale is "online" if its channel is set and isn't one of the in-store channels.
+function isOnline(s){
+  const ch=(s.channel||"").trim();
+  if(!ch) return false;
+  const off = DATA.settings.offlineChannels || ["Shop / Walk-in","Exhibition","Store","Walk-in","Counter"];
+  return !off.includes(ch);
+}
 function renderDashboard(){
   const c = $("#content");
-  const sales = DATA.sales, purchases = DATA.purchases, expenses = DATA.expenses;
-
-  const totalRevenue = sumBy(sales, saleTotal);
-  const totalCOGS = sumBy(sales, saleCost);
-  const grossProfit = totalRevenue - totalCOGS;
-  const totalExpenses = sumBy(expenses, e=>e.amount);
-  const saleExpenses = sumBy(sales, s=>Number(s.saleExpense)||0);   // per-sale costs (kept OUT of the Expenses tab)
-  const netProfit = grossProfit - totalExpenses - saleExpenses;
-  const totalPurchases = sumBy(purchases, purchaseTotal);
-
-  // Outstanding computed from amounts, not the status label, so stale paid
-  // values after a status toggle can't distort collectibles/payables.
-  const salesDue = sumBy(sales, saleDue);
-  const purchDue = sumBy(purchases, purchaseDue);
-
+  const R = periodRange(selectedPeriod);
+  const sales = inPeriod(DATA.sales), purchases = inPeriod(DATA.purchases), expenses = inPeriod(DATA.expenses);
+  const salesTot = sumBy(sales, saleTotal);
+  const purTot   = sumBy(purchases, purchaseTotal);
+  const expTot   = sumBy(expenses, e=>e.amount);
+  const codPending = sumBy(DATA.sales.filter(isOnline), saleDue);   // online money still owed = COD on the way (all-time)
   const low = lowStockProducts();
 
-  // This month
-  const tm = monthKey(today());
-  const mRev = sumBy(sales.filter(s=>monthKey(s.date)===tm), saleTotal);
-  const mExp = sumBy(expenses.filter(e=>monthKey(e.date)===tm), e=>e.amount);
-
-  let html = "";
-
-  if(low.length){
-    html += `<div class="alert">⚠️ <strong>${low.length}</strong> item(s) are low on stock — restock soon: ${low.slice(0,4).map(p=>esc(p.name)).join(", ")}${low.length>4?"…":""}</div>`;
-  }
-
+  const chips=[["today","Today"],["thisMonth","This month"],["lastMonth","Last month"],["last7","Last 7 days"],["last6m","Last 6 months"],["thisYear","This year"],["custom","Custom"]];
   const K=(cls,key,label,val,sub)=>`<div class="kpi ${cls} kpi-click" data-kpi="${key}" role="button" tabindex="0"><div class="kpi-label">${label}</div><div class="kpi-value">${val}</div><div class="kpi-sub">${sub} ›</div></div>`;
+
+  let html = `<div class="period-chips">${chips.map(([k,l])=>`<button class="pchip ${selectedPeriod===k?"active":""}" data-period="${k}">${esc(l)}</button>`).join("")}</div>`;
+  if(selectedPeriod==="custom"){
+    html += `<div class="form-grid" style="margin:0 0 14px"><div class="field"><label>From</label><input type="date" id="pcFrom" value="${customRange.from||""}"></div><div class="field"><label>To</label><input type="date" id="pcTo" value="${customRange.to||""}"></div></div>`;
+  }
   html += `<div class="kpi-grid">
-    ${K("green","revenue","Total Revenue",money(totalRevenue),`${sales.length} sale(s)`)}
-    ${K(netProfit>=0?"green":"red","netprofit","Net Profit",money(netProfit),"After all expenses")}
-    ${K("cyan","grossprofit","Gross Profit",money(grossProfit),"Revenue − cost of goods")}
-    ${K("red","expenses","Total Expenses",money(totalExpenses),`${expenses.length} entries`)}
-    ${K("amber","stock","Stock Value",money(stockValue()),`${DATA.products.length} products`)}
-    ${K("","collect","Money to Collect",money(salesDue),"Unpaid by customers")}
-    ${K("","pay","Money to Pay",money(purchDue),"Owed to suppliers")}
-    ${K("","month","This Month",money(mRev-mExp),`${money(mRev)} in · ${money(mExp)} out`)}
+    ${K("green","psales","Total Sales",money(salesTot),`${esc(R.label)} · ${sales.length} sale(s)`)}
+    ${K("amber","ppurchases","Stock Purchases",money(purTot),`${esc(R.label)} · ${purchases.length}`)}
+    ${K("red","pexpenses","Expenses",money(expTot),`${esc(R.label)} · ${expenses.length}`)}
   </div>`;
+  html += `<div class="kpi cod-card kpi-click" data-kpi="cod" role="button" tabindex="0"><div class="kpi-label">🚚 COD money on the way</div><div class="kpi-value">${money(codPending)}</div><div class="kpi-sub">Shiprocket will pay this into your account · tap to see ›</div></div>`;
+  if(low.length){
+    html += `<div class="alert">⚠️ <strong>${low.length}</strong> item(s) low on stock: ${low.slice(0,4).map(p=>esc(p.name)).join(", ")}${low.length>4?"…":""}</div>`;
+  }
+  html += `<div class="home-actions"><button class="btn btn-primary btn-lg" onclick="saleForm()">➕ Record a Sale</button><button class="btn btn-lg" onclick="productBulkForm()">📦 Add Stock</button></div>`;
 
   // Current month chart
   html += `<div class="grid-3">
@@ -606,6 +617,9 @@ function renderDashboard(){
     el.onclick=()=>{ buzz(); openKpiDetail(el.dataset.kpi); };
     el.onkeydown=(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); openKpiDetail(el.dataset.kpi); } };
   });
+  // period chips → change window & re-render
+  $$(".pchip").forEach(b=>b.onclick=()=>{ buzz(); selectedPeriod=b.dataset.period; try{localStorage.setItem("rc_period",selectedPeriod);}catch(e){} renderDashboard(); });
+  ["pcFrom","pcTo"].forEach(id=>{ const el=$("#"+id); if(el) el.onchange=()=>{ customRange={from:($("#pcFrom").value||""),to:($("#pcTo").value||"")}; renderDashboard(); }; });
 
   // Current month chart — week-by-week revenue vs spending
   const mk = monthKey(today());
@@ -615,9 +629,9 @@ function renderDashboard(){
   const daysInMonth = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate();
   const weekCount = Math.ceil(daysInMonth/7);
   const wkRev = Array(weekCount).fill(0), wkSpend = Array(weekCount).fill(0);
-  sales.filter(s=>monthKey(s.date)===mk).forEach(s=>{ wkRev[weekOf(s.date)] += saleTotal(s); });
-  expenses.filter(e=>monthKey(e.date)===mk).forEach(e=>{ wkSpend[weekOf(e.date)] += Number(e.amount)||0; });
-  purchases.filter(p=>monthKey(p.date)===mk).forEach(p=>{ wkSpend[weekOf(p.date)] += purchaseTotal(p); });
+  DATA.sales.filter(s=>monthKey(s.date)===mk).forEach(s=>{ wkRev[weekOf(s.date)] += saleTotal(s); });
+  DATA.expenses.filter(e=>monthKey(e.date)===mk).forEach(e=>{ wkSpend[weekOf(e.date)] += Number(e.amount)||0; });
+  DATA.purchases.filter(p=>monthKey(p.date)===mk).forEach(p=>{ wkSpend[weekOf(p.date)] += purchaseTotal(p); });
   const maxv = Math.max(1,...wkRev,...wkSpend);
   const monthRev = wkRev.reduce((a,b)=>a+b,0), monthSpend = wkSpend.reduce((a,b)=>a+b,0);
   let mc = `<div class="bar-row"><div class="lbl" style="font-weight:700;color:var(--text)">Total ▲ in</div>
@@ -690,7 +704,57 @@ window.openKpiDetail=(key)=>{
   const tm=monthKey(today());
   let title="", body="";
 
-  if(key==="revenue"){
+  if(key==="psales"){
+    const ps=inPeriod(DATA.sales), R=periodRange(selectedPeriod);
+    const online=ps.filter(isOnline), offline=ps.filter(s=>!isOnline(s));
+    const onTot=sumBy(online,saleTotal), offTot=sumBy(offline,saleTotal);
+    const prepaid=sumBy(online,s=>Number(s.paid)||0), codDue=sumBy(online,saleDue);
+    const byCh=groupSum(ps, s=>s.channel||"—", saleTotal);
+    const recent=[...ps].sort((a,b)=>(b.date||"").localeCompare(a.date||"")).slice(0,8);
+    title="Sales — "+R.label;
+    body = statRow("Total sales", money(sumBy(ps,saleTotal)), true)
+      + statRow("Number of sales", num(ps.length))
+      + sec("Online vs Store")
+      + statRow("🌐 Online sales — "+num(online.length), money(onTot), true)
+      + statRow("   • Prepaid (received)", money(prepaid))
+      + statRow("   • COD (on the way)", money(codDue))
+      + statRow("🏪 Store / walk-in — "+num(offline.length), money(offTot), true)
+      + sec("By channel") + (byCh.length?byCh.map(([n,v])=>statRow(n,money(v))).join(""):emptyLine())
+      + sec("Recent sales")
+      + kpiList(recent.map(s=>({main:esc((productById(s.productId)||{}).name||s.itemName||"Item")+" ×"+num(s.qty), sub:fmtDate(s.date)+" · "+esc(s.channel||"Store")+(s.customer?" · "+esc(s.customer):""), val:money(saleTotal(s)), cls:"pos"})), "No sales in this period");
+  }
+  else if(key==="ppurchases"){
+    const pp=inPeriod(DATA.purchases), R=periodRange(selectedPeriod);
+    const bySup=groupSum(pp, p=>p.supplier||"—", purchaseTotal);
+    const recent=[...pp].sort((a,b)=>(b.date||"").localeCompare(a.date||"")).slice(0,8);
+    title="Stock Purchases — "+R.label;
+    body = statRow("Total stock buying", money(sumBy(pp,purchaseTotal)), true)
+      + statRow("Entries", num(pp.length))
+      + sec("By supplier") + (bySup.length?bySup.map(([n,v])=>statRow(n,money(v))).join(""):emptyLine())
+      + sec("Recent")
+      + kpiList(recent.map(p=>({main:esc(p.itemName||"Item"), sub:fmtDate(p.date)+" · "+esc(p.supplier||""), val:money(purchaseTotal(p)), go:"purchases"})), "No purchases in this period");
+  }
+  else if(key==="pexpenses"){
+    const pe=inPeriod(DATA.expenses), R=periodRange(selectedPeriod);
+    const byCat=groupSum(pe, e=>e.category, e=>e.amount);
+    const recent=[...pe].sort((a,b)=>(b.date||"").localeCompare(a.date||"")).slice(0,8);
+    title="Daily Expenses — "+R.label;
+    body = statRow("Total expenses", money(sumBy(pe,e=>e.amount)), true)
+      + statRow("Entries", num(pe.length))
+      + sec("By category") + (byCat.length?byCat.map(([n,v])=>statRow(n,money(v))).join(""):emptyLine())
+      + sec("Recent")
+      + kpiList(recent.map(e=>({main:esc(e.category||"Expense"), sub:fmtDate(e.date)+" · "+esc(e.staff||""), val:money(e.amount), cls:"neg"})), "No expenses in this period");
+  }
+  else if(key==="cod"){
+    const codOrders=DATA.sales.filter(s=>isOnline(s)&&saleDue(s)>0).sort((a,b)=>saleDue(b)-saleDue(a));
+    title="COD money on the way";
+    body = statRow("Total on the way", money(sumBy(codOrders,saleDue)), true)
+      + statRow("Open COD orders", num(codOrders.length))
+      + `<div class="kpi-note">Money customers paid the courier (Shiprocket) — it reaches your bank about 8–9 days after delivery. When you receive it, edit that sale to <b>Paid</b> and it leaves this list.</div>`
+      + sec("Orders")
+      + kpiList(codOrders.map(s=>({main:esc(s.customer||"Customer")+" — "+esc((productById(s.productId)||{}).name||s.itemName||"Item"), sub:fmtDate(s.date)+" · "+esc(s.channel||""), val:money(saleDue(s)), cls:"neg", go:"sales"})), "No COD money pending 🎉");
+  }
+  else if(key==="revenue"){
     title="Total Revenue";
     const byCh=groupSum(sales, s=>s.channel, saleTotal);
     const recent=[...sales].sort((a,b)=>(b.date||"").localeCompare(a.date||"")).slice(0,8);
