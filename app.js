@@ -17,12 +17,13 @@ function defaultData(){
       enableGST:false, gstRate:18, gstInclusive:false,
       invoiceSeq:1, purchaseSeq:1,
       waPerOrder:0,
+      autoOnlineStock:false, autoOnlineStockFrom:"", skuMap:{},
       expenseCategories:["Rent","Salary","Transport","Marketing","Utilities","Packaging","Repairs","Misc"],
       saleChannels:["Shop / Walk-in","WhatsApp","Instagram","Amazon","Flipkart","Exhibition","Other"],
       productCategories:["RC Car","RC Truck","RC Drone","Battery","Charger","Spare Part","Tyres","Remote","Accessory"]
     },
     products:[], purchases:[], sales:[], expenses:[], approvals:[],
-    customers:[], suppliers:[], staff:[], waCharges:[],
+    customers:[], suppliers:[], staff:[], waCharges:[], onlineStockLedger:[],
     users:[{id:"u_admin",username:"admin",password:"admin",name:"Owner",role:"admin"}],
     seq:1
   };
@@ -64,6 +65,7 @@ async function loadOnlineOrders(){
     ONLINE_CHARGES = Array.isArray(d.charges) ? d.charges : [];
     ONLINE_CHARGES_SUMMARY = (d.charges_summary && typeof d.charges_summary==="object") ? d.charges_summary : null;
     onlineSyncedAt = d.synced_at || "";
+    reconcileOnlineStock();   // auto-reduce warehouse stock for online orders (no-op unless enabled)
     return true;
   }catch(e){ return false; }
 }
@@ -84,7 +86,7 @@ async function syncOnline(silent){
 }
 
 /* ---------- Storage ---------- */
-const COLLECTIONS = ["products","sales","purchases","expenses","customers","suppliers","staff","users","approvals","waCharges"];
+const COLLECTIONS = ["products","sales","purchases","expenses","customers","suppliers","staff","users","approvals","waCharges","onlineStockLedger"];
 function normalize(d){
   // deep-merge over defaults so older/partial data never has missing arrays/sub-keys
   const def = defaultData();
@@ -639,6 +641,51 @@ function waRate(){ return Number(DATA.settings.waPerOrder)||0; }
 function waAutoInPeriod(){ const orders = onlineInPeriod().length; const rate = waRate(); return { orders, rate, total: orders*rate }; }
 // Grand WhatsApp figure for the period = auto estimate + any manual one-off entries.
 function waTotalInPeriod(){ return waAutoInPeriod().total + waChargesInPeriod().total; }
+
+/* ---- Auto-reduce inventory from Shiprocket online orders ---- */
+function autoMatchSku(sku,name){
+  if(sku){ const p=DATA.products.find(x=>(x.sku||"").toLowerCase()===String(sku).toLowerCase()); if(p) return p.id; }
+  if(name){ const p=DATA.products.find(x=>(x.name||"").toLowerCase()===String(name).toLowerCase()); if(p) return p.id; }
+  return "";
+}
+function resolveOnlineSku(sku,name){
+  const map=DATA.settings.skuMap||{};
+  if(sku && map[sku]) return map[sku];
+  if(name && map[name]) return map[name];
+  return autoMatchSku(sku,name) || null;
+}
+function distinctOnlineSkus(){
+  const m={};
+  ONLINE_ORDERS.forEach(o=>(o.items||[]).forEach(it=>{ const k=it.sku||it.name; if(!k) return; if(!m[k]) m[k]={sku:it.sku||"", name:it.name||"", orders:0, units:0}; m[k].orders++; m[k].units+=Number(it.qty)||0; }));
+  return Object.values(m).sort((a,b)=>b.orders-a.orders);
+}
+function unmatchedOnlineSkus(){ return distinctOnlineSkus().filter(s=>!resolveOnlineSku(s.sku,s.name)); }
+// Deduct warehouse stock for each active online order ONCE; add it back on cancel/RTO. Idempotent via onlineStockLedger.
+function reconcileOnlineStock(){
+  if(!DATA.settings.autoOnlineStock) return;
+  if(!Array.isArray(DATA.onlineStockLedger)) DATA.onlineStockLedger=[];
+  const byId={}; DATA.onlineStockLedger.forEach(r=>{ if(r&&r.id) byId[r.id]=r; });
+  const cutoff = DATA.settings.autoOnlineStockFrom||"";   // "" = all history; else only orders on/after this date
+  let changed=false;
+  ONLINE_ORDERS.forEach(o=>{
+    if(o.sr_id==null) return;
+    const id="os_"+o.sr_id;
+    const hold = !o.is_cancelled && !o.is_rto;   // stock is out (sold, not returned/cancelled)
+    const existing = byId[id];
+    if(hold && !existing){
+      if(cutoff && (o.order_ymd||"") < cutoff) return;   // going-forward only: skip pre-cutoff orders
+      const lines=[];
+      (o.items||[]).forEach(it=>{ const pid=resolveOnlineSku(it.sku,it.name); const q=Number(it.qty)||0; if(pid && q>0){ adjustStock(pid,-q,"wh"); lines.push({productId:pid, qty:q}); } });
+      if(lines.length){ const rec={id, sr_id:o.sr_id, lines, updatedAt:nowISO()}; DATA.onlineStockLedger.push(rec); byId[id]=rec; changed=true; }
+    } else if(!hold && existing){
+      (existing.lines||[]).forEach(l=>adjustStock(l.productId, +(Number(l.qty)||0), "wh"));
+      tomb(existing.id);
+      DATA.onlineStockLedger = DATA.onlineStockLedger.filter(r=>r.id!==id);
+      delete byId[id]; changed=true;
+    }
+  });
+  if(changed) save();
+}
 function fmtWhen(iso){ try{ const d=new Date(iso); if(isNaN(d.getTime())) return ""; return d.toLocaleString("en-IN",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}); }catch(e){ return ""; } }
 function renderDashboard(){
   const c = $("#content");
@@ -762,7 +809,7 @@ window.openKpiDetail=(key)=>{
         + `<div class="kpi-di" role="button" tabindex="0" onclick="openKpiDetail('cod')"><div><div class="li-main">🚚 COD money on the way</div><div class="li-sub">tap to see orders ›</div></div><div class="kpi-di-val">${money(codPending)}</div></div>`
         + `<div class="kpi-di" role="button" tabindex="0" onclick="openKpiDetail('srcharges')"><div><div class="li-main">📦 Shiprocket charges</div><div class="li-sub">freight · COD fee · returns · WhatsApp ›</div></div><div class="kpi-di-val neg">${money(srGrand)}</div></div>`
       + `</div>`
-      + `<div style="margin:12px 0"><button class="btn btn-sm" onclick="syncOnlineNow()">🔄 Sync online orders</button> <span class="sync-note">${onlineSyncedAt?("Last synced "+esc(fmtWhen(onlineSyncedAt))):"not synced yet"}</span></div>`
+      + `<div style="margin:12px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button class="btn btn-sm" onclick="syncOnlineNow()">🔄 Sync online orders</button><button class="btn btn-sm" onclick="openStockMapping()">🔗 Auto-reduce stock${(()=>{const u=unmatchedOnlineSkus().length; return u?` (${u} to match)`:(DATA.settings.autoOnlineStock?" · on":"");})()}</button></div><div class="sync-note" style="margin:-4px 0 6px">${onlineSyncedAt?("Last synced "+esc(fmtWhen(onlineSyncedAt))):"not synced yet"}</div>`
       + sec("Recent online orders")
       + kpiList(recent.map(o=>({main:esc(o.customer_name||"Customer")+" · "+esc(o.channel_order_id||""), sub:fmtDate(o.order_ymd)+" · "+esc(o.status||"")+" · "+(o.payment_method==="cod"?"COD":"Prepaid"), val:money(orderVal(o)), cls:"pos"})), on.length?"":"No online orders in this period");
   }
@@ -946,6 +993,32 @@ window.openKpiDetail=(key)=>{
 // Add / edit a manual WhatsApp (or other) Shiprocket charge, then return to the drill-down.
 function refreshSrChargesDetail(){ if(currentView==="dashboard"){ renderDashboard(); openKpiDetail("srcharges"); } else { closeModal(); } }
 window.syncOnlineNow=async ()=>{ await syncOnline(false); if(currentView==="dashboard") renderDashboard(); openKpiDetail("online"); };
+// Match website product SKUs to inventory items + toggle auto stock-reduction.
+window.openStockMapping=()=>{
+  const skus=distinctOnlineSkus();
+  const prodOpts=DATA.products.map(p=>({id:p.id, label:prodPickLabel(p)}));
+  const map=DATA.settings.skuMap||{};
+  const rows=skus.map(s=>{
+    const cur=(s.sku&&map[s.sku]) || (s.name&&map[s.name]) || autoMatchSku(s.sku,s.name) || "";
+    const opts=`<option value="">— don't track —</option>`+prodOpts.map(o=>`<option value="${o.id}" ${String(o.id)===String(cur)?"selected":""}>${esc(o.label)}</option>`).join("");
+    return `<div class="map-row"><div class="map-sku"><div class="li-main">${esc(s.name||s.sku)}</div><div class="li-sub">${esc(s.sku||"no SKU")} · ${s.orders} order(s)</div></div><select data-sku="${esc(s.sku||s.name)}">${opts}</select></div>`;
+  }).join("");
+  openModal("Online stock — product matching",
+    `<div class="kpi-note">Match each website product to your inventory item, then switch on auto-reduce. The app subtracts <strong>warehouse</strong> stock for every online order and adds it back on returns/cancellations. Products left on “don’t track” are ignored.</div>`
+    + `<label class="map-toggle"><input type="checkbox" id="autoStockChk" ${DATA.settings.autoOnlineStock?"checked":""}> <span>Automatically reduce stock for online orders</span></label>`
+    + `<label class="map-toggle" style="opacity:.92"><input type="checkbox" id="autoStockRetro"> <span>Also apply to <strong>past</strong> online orders (retroactive). Leave off to start from today only.</span></label>`
+    + `<div class="map-list">${rows||'<div class="empty">No online products yet — tap “Sync online orders” first.</div>'}</div>`
+    + `<div class="form-actions"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="saveMapBtn">Save &amp; apply</button></div>`);
+  const btn=$("#saveMapBtn"); if(btn) btn.onclick=()=>{
+    const m={}; $$("#modalBody select[data-sku]").forEach(sel=>{ if(sel.value) m[sel.dataset.sku]=sel.value; });
+    const on=$("#autoStockChk").checked, retro=$("#autoStockRetro")&&$("#autoStockRetro").checked;
+    DATA.settings.skuMap=m; DATA.settings.autoOnlineStock=on;
+    if(on){ if(retro) DATA.settings.autoOnlineStockFrom=""; else if(!DATA.settings.autoOnlineStockFrom) DATA.settings.autoOnlineStockFrom=today(); }
+    DATA.settings.updatedAt=nowISO();
+    save(); reconcileOnlineStock(); closeModal(); toast("Stock matching saved","ok");
+    if(currentView==="dashboard") renderDashboard(); else if(currentView==="inventory") drawInventory();
+  };
+};
 window.waChargeForm=(id)=>{
   const w = id ? (DATA.waCharges||[]).find(x=>x.id===id) : {date:today(), amount:"", notes:""};
   if(id && !w) return;
@@ -1400,6 +1473,7 @@ function expenseForm(id){
 let invFilter={q:"",cat:""};
 function renderInventory(){
   addTopAction("➕ Add Inventory","btn-primary",()=>productBulkForm());
+  addTopAction("🔗 Online stock","",()=>openStockMapping());
   addTopAction("⬇️ Export CSV","",()=>exportCSV("products"));
   $("#content").innerHTML=`<div class="panel">
     <div class="filters">

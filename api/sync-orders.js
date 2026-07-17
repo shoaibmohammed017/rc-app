@@ -59,6 +59,12 @@ function mapOrder(o) {
     payment_status: o.payment_status || null,
     total: parseFloat(o.total) || 0,
     qty: parseInt(o.product_quantity, 10) || 0,
+    // product lines (for auto-reducing inventory): sku + name + quantity
+    items: Array.isArray(o.products) ? o.products.map((p) => ({
+      sku: (p.channel_sku || p.sku || p.master_sku || "").toString(),
+      name: (p.name || "").toString(),
+      qty: parseInt(p.quantity, 10) || 0,
+    })).filter((it) => it.qty > 0 && (it.sku || it.name)) : [],
     status: status || null,
     status_code: Number.isFinite(+o.status_code) ? +o.status_code : null,
     master_status: master || null,
