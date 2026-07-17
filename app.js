@@ -648,18 +648,15 @@ function autoMatchSku(sku,name){
   if(name){ const p=DATA.products.find(x=>(x.name||"").toLowerCase()===String(name).toLowerCase()); if(p) return p.id; }
   return "";
 }
-function resolveOnlineSku(sku,name){
-  const map=DATA.settings.skuMap||{};
-  if(sku && map[sku]) return map[sku];
-  if(name && map[name]) return map[name];
-  return autoMatchSku(sku,name) || null;
-}
+// For ACTUAL deduction we require an EXPLICIT mapping — never a fuzzy guess — so stock is
+// only ever reduced from the product the user chose. autoMatchSku is only a UI suggestion.
+function mappedProductId(sku,name){ const map=DATA.settings.skuMap||{}; return (sku&&map[sku]) || (name&&map[name]) || null; }
 function distinctOnlineSkus(){
   const m={};
   ONLINE_ORDERS.forEach(o=>(o.items||[]).forEach(it=>{ const k=it.sku||it.name; if(!k) return; if(!m[k]) m[k]={sku:it.sku||"", name:it.name||"", orders:0, units:0}; m[k].orders++; m[k].units+=Number(it.qty)||0; }));
   return Object.values(m).sort((a,b)=>b.orders-a.orders);
 }
-function unmatchedOnlineSkus(){ return distinctOnlineSkus().filter(s=>!resolveOnlineSku(s.sku,s.name)); }
+function unmatchedOnlineSkus(){ return distinctOnlineSkus().filter(s=>!mappedProductId(s.sku,s.name)); }
 // Deduct warehouse stock for each active online order ONCE; add it back on cancel/RTO. Idempotent via onlineStockLedger.
 function reconcileOnlineStock(){
   if(!DATA.settings.autoOnlineStock) return;
@@ -673,9 +670,9 @@ function reconcileOnlineStock(){
     const hold = !o.is_cancelled && !o.is_rto;   // stock is out (sold, not returned/cancelled)
     const existing = byId[id];
     if(hold && !existing){
-      if(cutoff && (o.order_ymd||"") < cutoff) return;   // going-forward only: skip pre-cutoff orders
+      if(cutoff && o.order_ymd && o.order_ymd < cutoff) return;   // going-forward only: skip pre-cutoff dated orders
       const lines=[];
-      (o.items||[]).forEach(it=>{ const pid=resolveOnlineSku(it.sku,it.name); const q=Number(it.qty)||0; if(pid && q>0){ adjustStock(pid,-q,"wh"); lines.push({productId:pid, qty:q}); } });
+      (o.items||[]).forEach(it=>{ const pid=mappedProductId(it.sku,it.name); const q=Number(it.qty)||0; if(pid && q>0){ adjustStock(pid,-q,"wh"); lines.push({productId:pid, qty:q}); } });
       if(lines.length){ const rec={id, sr_id:o.sr_id, lines, updatedAt:nowISO()}; DATA.onlineStockLedger.push(rec); byId[id]=rec; changed=true; }
     } else if(!hold && existing){
       (existing.lines||[]).forEach(l=>adjustStock(l.productId, +(Number(l.qty)||0), "wh"));
@@ -1006,7 +1003,7 @@ window.openStockMapping=()=>{
   openModal("Online stock — product matching",
     `<div class="kpi-note">Match each website product to your inventory item, then switch on auto-reduce. The app subtracts <strong>warehouse</strong> stock for every online order and adds it back on returns/cancellations. Products left on “don’t track” are ignored.</div>`
     + `<label class="map-toggle"><input type="checkbox" id="autoStockChk" ${DATA.settings.autoOnlineStock?"checked":""}> <span>Automatically reduce stock for online orders</span></label>`
-    + `<label class="map-toggle" style="opacity:.92"><input type="checkbox" id="autoStockRetro"> <span>Also apply to <strong>past</strong> online orders (retroactive). Leave off to start from today only.</span></label>`
+    + `<label class="map-toggle" style="opacity:.92"><input type="checkbox" id="autoStockRetro"> <span>Also apply to <strong>past</strong> online orders (retroactive) — only if your current stock counts do <em>not</em> already reflect past online sales. Leave off to start from today.</span></label>`
     + `<div class="map-list">${rows||'<div class="empty">No online products yet — tap “Sync online orders” first.</div>'}</div>`
     + `<div class="form-actions"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="saveMapBtn">Save &amp; apply</button></div>`);
   const btn=$("#saveMapBtn"); if(btn) btn.onclick=()=>{
@@ -2526,7 +2523,7 @@ function setupRealtime(){
       .on("postgres_changes", { event:"*", schema:"public", table:"business_state" }, async (payload)=>{
         if($("#modalOverlay").classList.contains("open")) return; // don't disrupt an open form
         const rowId = (payload && payload.new && payload.new.id) || (payload && payload.old && payload.old.id);
-        if(rowId === "online_orders"){ await loadOnlineOrders(); if(currentView) go(currentView); return; }
+        if(rowId === "online_orders"){ await fetchCloud(); await loadOnlineOrders(); if(currentView) go(currentView); return; }
         const changed = await fetchCloud();
         if(changed && currentView) go(currentView);
       })
