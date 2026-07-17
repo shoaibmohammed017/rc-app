@@ -16,6 +16,7 @@ function defaultData(){
       address:"", phone:"", gstin:"",
       enableGST:false, gstRate:18, gstInclusive:false,
       invoiceSeq:1, purchaseSeq:1,
+      waPerOrder:0,
       expenseCategories:["Rent","Salary","Transport","Marketing","Utilities","Packaging","Repairs","Misc"],
       saleChannels:["Shop / Walk-in","WhatsApp","Instagram","Amazon","Flipkart","Exhibition","Other"],
       productCategories:["RC Car","RC Truck","RC Drone","Battery","Charger","Spare Part","Tyres","Remote","Accessory"]
@@ -627,6 +628,12 @@ function waChargesInPeriod(){
   const entries = (DATA.waCharges||[]).filter(w=>{ const d=w.date||""; if(!d) return false; if(r.from && d<r.from) return false; if(r.to && d>r.to) return false; return true; });
   return { total: sumBy(entries, w=>Number(w.amount)||0), count: entries.length, entries: entries.sort((a,b)=>(b.date||"").localeCompare(a.date||"")) };
 }
+// Auto WhatsApp estimate — Shiprocket's API doesn't return WhatsApp charges, so
+// estimate them as (online orders in period) × a per-order rate the user sets.
+function waRate(){ return Number(DATA.settings.waPerOrder)||0; }
+function waAutoInPeriod(){ const orders = onlineInPeriod().length; const rate = waRate(); return { orders, rate, total: orders*rate }; }
+// Grand WhatsApp figure for the period = auto estimate + any manual one-off entries.
+function waTotalInPeriod(){ return waAutoInPeriod().total + waChargesInPeriod().total; }
 function fmtWhen(iso){ try{ const d=new Date(iso); if(isNaN(d.getTime())) return ""; return d.toLocaleString("en-IN",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}); }catch(e){ return ""; } }
 function renderDashboard(){
   const c = $("#content");
@@ -660,10 +667,10 @@ function renderDashboard(){
   </div>`;
   html += `<div class="kpi cod-card kpi-click" data-kpi="cod" role="button" tabindex="0"><div class="kpi-label">🚚 COD money on the way</div><div class="kpi-value">${money(codPending)}</div><div class="kpi-sub">Shiprocket will pay this into your account · tap to see ›</div></div>`;
   const srC = onlineChargesInPeriod();
-  const waC = waChargesInPeriod();
-  const srGrand = srC.total + waC.total;
+  const waTot = waTotalInPeriod();
+  const srGrand = srC.total + waTot;
   if(srGrand>0 || ONLINE_CHARGES.length || (DATA.waCharges&&DATA.waCharges.length)){
-    const waBit = waC.total>0 ? ` · 📱 ${money(waC.total)} WhatsApp` : "";
+    const waBit = waTot>0 ? ` · 📱 ${money(waTot)} WhatsApp` : "";
     html += `<div class="kpi ship-card kpi-click" data-kpi="srcharges" role="button" tabindex="0"><div class="kpi-label">📦 Shiprocket charges — ${esc(R.label)}</div><div class="kpi-value">${money(srGrand)}</div><div class="kpi-sub">🚚 ${money(srC.freight)} freight · 💵 ${money(srC.cod)} COD fee · ↩️ ${money(srC.rto)} returns${waBit} · tap to see ›</div></div>`;
   }
   html += `<div class="sync-bar"><button class="btn btn-sm" id="syncOnlineBtn">🔄 Sync online orders</button><span class="sync-note" id="syncNote"></span></div>`;
@@ -872,7 +879,9 @@ window.openKpiDetail=(key)=>{
   else if(key==="srcharges"){
     const R=periodRange(selectedPeriod);
     const c=onlineChargesInPeriod();
-    const wa=waChargesInPeriod();
+    const wa=waChargesInPeriod();          // manual one-off WhatsApp/other entries
+    const waAuto=waAutoInPeriod();          // auto estimate = orders × per-order rate
+    const waTot=waAuto.total+wa.total;      // combined WhatsApp figure for the period
     const wb=walletBalance();
     const ordByAwb={}; ONLINE_ORDERS.forEach(o=>{ if(o.awb) ordByAwb[o.awb]=o; });
     const inPer=ONLINE_CHARGES.filter(x=>{ const d=x.ymd||""; if(!d) return false; if(R.from&&d<R.from) return false; if(R.to&&d>R.to) return false; return true; })
@@ -884,22 +893,25 @@ window.openKpiDetail=(key)=>{
     const waList = wa.entries.length
       ? `<div class="kpi-detail-list">`+wa.entries.map(w=>`
           <div class="kpi-di">
-            <div><div class="li-main">📱 ${esc(w.notes||"WhatsApp charges")}</div><div class="li-sub">${fmtDate(w.date)}</div></div>
+            <div><div class="li-main">📱 ${esc(w.notes||"WhatsApp charges")}</div><div class="li-sub">${fmtDate(w.date)} · one-off</div></div>
             <div style="display:flex;align-items:center;gap:8px"><span class="kpi-di-val neg">${money(w.amount)}</span>
               <button class="icon-btn" onclick="waChargeForm('${w.id}')" title="Edit">✏️</button>
               <button class="icon-btn del" onclick="deleteWaCharge('${w.id}')" title="Delete">🗑️</button></div>
           </div>`).join("")+`</div>`
-      : `<div class="empty">None added yet — tap “➕ Add WhatsApp charge”.</div>`;
-    body = statRow("Total charged", money(c.total+wa.total), true)
+      : "";
+    body = statRow("Total charged", money(c.total+waTot), true)
       + statRow("Shipments charged", num(c.count))
       + sec("What you're paying for")
       + statRow("🚚 Freight (shipping)", money(c.freight))
       + statRow("💵 COD collection fees", money(c.cod))
       + statRow("↩️ RTO / returns", money(c.rto))
-      + statRow("📱 WhatsApp / notifications", money(wa.total))
-      + sec("📱 WhatsApp / other charges (added by you)")
-      + `<div class="kpi-note">Shiprocket's API doesn't share WhatsApp/notification charges, so add them here from your Shiprocket wallet passbook (e.g. once a month). They're included in the total above.</div>`
-      + `<div style="margin:8px 0 6px"><button class="btn btn-sm" onclick="waChargeForm()">➕ Add WhatsApp charge</button></div>`
+      + statRow("📱 WhatsApp / notifications", money(waTot))
+      + sec("📱 WhatsApp charges")
+      + `<div class="kpi-note">Shiprocket's API doesn't share WhatsApp charges, so the app <strong>estimates</strong> them: online orders × your per-order rate (Shiprocket's is about ₹5–7/order — check your wallet). It updates automatically as orders sync.</div>`
+      + statRow("Rate per order", waAuto.rate>0 ? money(waAuto.rate) : "— not set")
+      + statRow("Auto estimate", waAuto.rate>0 ? `${num(waAuto.orders)} orders × ${money(waAuto.rate)} = ${money(waAuto.total)}` : "set a rate to enable")
+      + (wa.total>0 ? statRow("One-off entries", money(wa.total)) : "")
+      + `<div style="margin:8px 0 6px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-sm" onclick="waRateForm()">⚙️ ${waAuto.rate>0?"Change":"Set"} WhatsApp rate</button><button class="btn btn-sm" onclick="waChargeForm()">➕ Add one-off charge</button></div>`
       + waList
       + sec("Shiprocket wallet (live)")
       + wbLine
@@ -1011,6 +1023,17 @@ window.deleteWaCharge=(id)=>{
   if(!confirm("Delete this WhatsApp charge?")) return;
   DATA.waCharges=(DATA.waCharges||[]).filter(x=>x.id!==id); tomb(id);
   save(); toast("Deleted"); refreshSrChargesDetail();
+};
+// Set the per-order WhatsApp rate used for the auto estimate.
+window.waRateForm=()=>{
+  buildForm([
+    {name:"rate",label:"WhatsApp charge per order (₹)",type:"number",value:(waRate()||""),required:true,placeholder:"e.g. 5.90 — check your Shiprocket wallet"}
+  ],(o)=>{
+    const r=Number(o.rate);
+    if(!(r>=0)){ toast("Enter a valid rate (0 or more)","err"); return; }
+    DATA.settings.waPerOrder=r; DATA.settings.updatedAt=nowISO();
+    save(); toast("WhatsApp rate saved","ok"); refreshSrChargesDetail();
+  },"Save rate","WhatsApp charge per order");
 };
 
 function lastNMonths(n){
