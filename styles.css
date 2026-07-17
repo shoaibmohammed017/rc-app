@@ -157,6 +157,11 @@ td.num,th.num{ text-align:right }
   box-shadow:0 0 0 3px rgba(245,158,11,.25) }
 .field textarea{ resize:vertical; min-height:84px }
 .form-actions{ display:flex; gap:10px; justify-content:flex-end; margin-top:18px; grid-column:1/-1 }
+.form-more{ margin-top:14px; border-top:1px solid var(--line); padding-top:10px }
+.form-more>summary{ cursor:pointer; font-size:12px; font-weight:800; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; list-style:none; padding:4px 0; user-select:none }
+.form-more>summary::-webkit-details-marker{ display:none }
+.form-more[open]>summary{ margin-bottom:12px }
+.form-more>.form-grid{ margin-top:4px }
 
 /* ---------- Filters ---------- */
 .filters{ display:flex; gap:10px; flex-wrap:wrap; align-items:end; margin-bottom:14px }
