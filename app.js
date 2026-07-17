@@ -46,17 +46,22 @@ if (CLOUD) { try { sb = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPAB
 
 /* ---------- Shiprocket ONLINE ORDERS (separate table; app reads, server writes) ---------- */
 let ONLINE_ORDERS = [];
+let ONLINE_CHARGES = [];            // per-shipment Shiprocket charges: {ymd, freight, cod, rto, total, awb}
+let ONLINE_CHARGES_SUMMARY = null;  // {freight, cod, rto, total, count, wallet_balance} — account-wide totals
 let onlineSyncedAt = "";
 let onlineSyncing = false;
 async function loadOnlineOrders(){
   if(!CLOUD || !sb) return false;
   try{
     // Online orders live in a separate row of business_state (id='online_orders'),
-    // { orders:[...], synced_at }. Kept apart from the 'main' business blob.
+    // { orders:[...], charges:[...], charges_summary:{...}, synced_at }. Kept apart
+    // from the 'main' business blob.
     const { data, error } = await sb.from("business_state").select("data").eq("id","online_orders").maybeSingle();
     if(error){ return false; }
     const d = (data && data.data) || {};
     ONLINE_ORDERS = Array.isArray(d.orders) ? d.orders : [];
+    ONLINE_CHARGES = Array.isArray(d.charges) ? d.charges : [];
+    ONLINE_CHARGES_SUMMARY = (d.charges_summary && typeof d.charges_summary==="object") ? d.charges_summary : null;
     onlineSyncedAt = d.synced_at || "";
     return true;
   }catch(e){ return false; }
@@ -601,6 +606,21 @@ function orderVal(o){ return Number(o.total)||0; }
 // COD still owed to us = COD, not cancelled, not returned (RTO). Shiprocket remits this ~8–9 days after delivery.
 function codOnTheWay(){ return ONLINE_ORDERS.filter(o=>o.payment_method==="cod" && !o.is_cancelled && !o.is_rto); }
 function onlineChannelLabel(o){ const c=(o.channel_order_id||""); if(/^PRC-/i.test(c)) return "Website"; return (o.channel_name && !/custom/i.test(o.channel_name)) ? o.channel_name : "Online"; }
+// What Shiprocket charged us (freight + COD fee + RTO returns) within the selected period.
+function onlineChargesInPeriod(){
+  const r = periodRange(selectedPeriod);
+  const out = { freight:0, cod:0, rto:0, total:0, count:0 };
+  ONLINE_CHARGES.forEach(c=>{
+    if(!c) return;
+    const d = c.ymd||""; if(!d) return;
+    if(r.from && d<r.from) return; if(r.to && d>r.to) return;
+    out.freight += Number(c.freight)||0; out.cod += Number(c.cod)||0; out.rto += Number(c.rto)||0;
+    out.total += Number(c.total)|| ((Number(c.freight)||0)+(Number(c.cod)||0)+(Number(c.rto)||0));
+    out.count++;
+  });
+  return out;
+}
+function walletBalance(){ return ONLINE_CHARGES_SUMMARY && ONLINE_CHARGES_SUMMARY.wallet_balance != null ? Number(ONLINE_CHARGES_SUMMARY.wallet_balance) : null; }
 function fmtWhen(iso){ try{ const d=new Date(iso); if(isNaN(d.getTime())) return ""; return d.toLocaleString("en-IN",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}); }catch(e){ return ""; } }
 function renderDashboard(){
   const c = $("#content");
@@ -633,6 +653,10 @@ function renderDashboard(){
     ${K("red","pexpenses","Expenses",money(expTot),`${esc(R.label)} · ${expenses.length}`)}
   </div>`;
   html += `<div class="kpi cod-card kpi-click" data-kpi="cod" role="button" tabindex="0"><div class="kpi-label">🚚 COD money on the way</div><div class="kpi-value">${money(codPending)}</div><div class="kpi-sub">Shiprocket will pay this into your account · tap to see ›</div></div>`;
+  const srC = onlineChargesInPeriod();
+  if(srC.total>0 || ONLINE_CHARGES.length){
+    html += `<div class="kpi ship-card kpi-click" data-kpi="srcharges" role="button" tabindex="0"><div class="kpi-label">📦 Shiprocket charges — ${esc(R.label)}</div><div class="kpi-value">${money(srC.total)}</div><div class="kpi-sub">🚚 ${money(srC.freight)} freight · 💵 ${money(srC.cod)} COD fee · ↩️ ${money(srC.rto)} returns · tap to see ›</div></div>`;
+  }
   html += `<div class="sync-bar"><button class="btn btn-sm" id="syncOnlineBtn">🔄 Sync online orders</button><span class="sync-note" id="syncNote"></span></div>`;
   if(low.length){
     html += `<div class="alert">⚠️ <strong>${low.length}</strong> item(s) low on stock: ${low.slice(0,4).map(p=>esc(p.name)).join(", ")}${low.length>4?"…":""}</div>`;
@@ -835,6 +859,29 @@ window.openKpiDetail=(key)=>{
       + `<div class="kpi-note">Cash your customers pay the courier. Shiprocket remits it to your bank about 8–9 days after delivery. Cancelled and returned (RTO) orders are excluded automatically.</div>`
       + sec("Orders")
       + kpiList(rows, "No COD money pending 🎉");
+  }
+  else if(key==="srcharges"){
+    const R=periodRange(selectedPeriod);
+    const c=onlineChargesInPeriod();
+    const wb=walletBalance();
+    const ordByAwb={}; ONLINE_ORDERS.forEach(o=>{ if(o.awb) ordByAwb[o.awb]=o; });
+    const inPer=ONLINE_CHARGES.filter(x=>{ const d=x.ymd||""; if(!d) return false; if(R.from&&d<R.from) return false; if(R.to&&d>R.to) return false; return true; })
+      .sort((a,b)=>(b.ymd||"").localeCompare(a.ymd||"")).slice(0,12);
+    title="Shiprocket charges — "+R.label;
+    const wbLine = wb==null ? "" : (wb<0
+      ? statRow("You owe Shiprocket now", money(Math.abs(wb)), true)
+      : statRow("Wallet balance available", money(wb), true));
+    body = statRow("Total charged", money(c.total), true)
+      + statRow("Shipments charged", num(c.count))
+      + sec("What you're paying for")
+      + statRow("🚚 Freight (shipping)", money(c.freight))
+      + statRow("💵 COD collection fees", money(c.cod))
+      + statRow("↩️ RTO / returns", money(c.rto))
+      + sec("Shiprocket wallet (live)")
+      + wbLine
+      + `<div class="kpi-note">Freight, COD fees and returns above are itemised straight from each shipment. <strong>WhatsApp/notification charges aren't listed by Shiprocket's API</strong> — they only appear inside your Shiprocket wallet. The live balance shown here already accounts for everything (all charges minus your top-ups), so top up the wallet to clear a negative balance.</div>`
+      + sec("Recent charges")
+      + kpiList(inPer.map(x=>{ const o=ordByAwb[x.awb]; const who=o?(esc(o.customer_name||"Customer")+" · "+esc(o.channel_order_id||x.awb||"")):(esc(x.awb||"Shipment")); const parts=[]; if(x.freight)parts.push("freight "+money(x.freight)); if(x.cod)parts.push("COD "+money(x.cod)); if(x.rto)parts.push("return "+money(x.rto)); return {main:who, sub:fmtDate(x.ymd)+" · "+parts.join(" · "), val:money(x.total), cls:"neg"}; }), c.total>0?"":"No Shiprocket charges in this period");
   }
   else if(key==="revenue"){
     title="Total Revenue";
