@@ -162,6 +162,11 @@ td.num,th.num{ text-align:right }
 .form-more>summary::-webkit-details-marker{ display:none }
 .form-more[open]>summary{ margin-bottom:12px }
 .form-more>.form-grid{ margin-top:4px }
+.mo-tabs{ display:flex; gap:8px; margin-bottom:16px }
+.mo-tab{ flex:1; padding:12px; border:1px solid var(--line); background:var(--surface); border-radius:12px; font-weight:800; font-size:14px; cursor:pointer; color:var(--muted) }
+.mo-tab.active{ background:var(--primary); color:#000; border-color:var(--primary) }
+.mo-tab:active{ transform:scale(.98) }
+.nav-sep{ font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); padding:14px 12px 6px; opacity:.6 }
 
 /* ---------- Filters ---------- */
 .filters{ display:flex; gap:10px; flex-wrap:wrap; align-items:end; margin-bottom:14px }

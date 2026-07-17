@@ -363,10 +363,10 @@ function rangeFilter(arr, from, to){
    ROUTER
    ============================================================ */
 const VIEWS = {
-  dashboard:{title:"Dashboard", render:renderDashboard},
+  dashboard:{title:"Home", render:renderDashboard},
   sales:{title:"Sales", render:renderSales},
-  purchases:{title:"Purchases", render:renderPurchases},
-  expenses:{title:"Expenses", render:renderExpenses},
+  purchases:{title:"Money Out", render:renderPurchases},
+  expenses:{title:"Money Out", render:renderExpenses},
   inventory:{title:"Inventory", render:renderInventory},
   customers:{title:"Customers", render:renderCustomers},
   suppliers:{title:"Suppliers", render:renderSuppliers},
@@ -378,13 +378,15 @@ const VIEWS = {
 };
 let currentView = "dashboard";
 
-const PRIMARY_TABS = ["dashboard","sales","purchases","expenses"];
+const PRIMARY_TABS = ["dashboard","sales","inventory","purchases","expenses"];
 function go(view){
   if(staffMode && view!=="staffhome"){ view="staffhome"; }   // staff are locked to their own dashboard
   if(view==="settings" && !isAdmin()){ toast("Only admins can open Settings","err"); view="dashboard"; }
   if(view==="approvals" && !isAdmin()){ view="dashboard"; }
   currentView = view;
-  $$(".nav-item").forEach(b=>b.classList.toggle("active", b.dataset.view===view));
+  // "Money Out" groups purchases + expenses under one nav item (data-view="purchases")
+  const navKey = (view==="expenses") ? "purchases" : view;
+  $$(".nav-item").forEach(b=>b.classList.toggle("active", b.dataset.view===navKey));
   // bottom-nav "More" lights up for any non-primary view
   const moreBtn = $("#moreBtn");
   if(moreBtn) moreBtn.classList.toggle("active", !PRIMARY_TABS.includes(view));
@@ -423,7 +425,6 @@ function closeSheet(){ /* the More/quick-add sheet reuses the modal; closeModal 
 
 /* ---------- Mobile: More sheet + Quick-add ---------- */
 const MORE_LINKS = [
-  {view:"inventory", icon:"🚗", label:"Inventory", sub:"Stock & products"},
   {view:"customers", icon:"👥", label:"Customers", sub:"Who buys from you"},
   {view:"suppliers", icon:"🏭", label:"Suppliers", sub:"Who you buy from"},
   {view:"staff", icon:"🧑‍🔧", label:"Staff", sub:"Your team"},
@@ -1111,10 +1112,17 @@ function saleForm(id){
    PURCHASES
    ============================================================ */
 let purFilter={q:"",from:"",to:""};
+// Money Out = Stock In (purchases) + Spending (expenses), shown with a shared tab bar.
+function moneyOutTabs(active){
+  return `<div class="mo-tabs">
+    <button class="mo-tab ${active==='purchases'?'active':''}" onclick="go('purchases')">📦 Stock In</button>
+    <button class="mo-tab ${active==='expenses'?'active':''}" onclick="go('expenses')">🧾 Spending</button>
+  </div>`;
+}
 function renderPurchases(){
-  addTopAction("➕ New Purchase","btn-primary",()=>purchaseOrderForm());
+  addTopAction("➕ Add Stock Purchase","btn-primary",()=>purchaseOrderForm());
   addTopAction("⬇️ Export CSV","",()=>exportCSV("purchases"));
-  $("#content").innerHTML = `<div class="panel">
+  $("#content").innerHTML = moneyOutTabs("purchases") + `<div class="panel">
     <div class="filters">
       <div class="field search"><label>Search</label><input id="pQ" placeholder="Product / supplier / staff..." value="${esc(purFilter.q)}"></div>
       <div class="field"><label>From</label><input type="date" id="pFrom" value="${purFilter.from}"></div>
@@ -1336,9 +1344,9 @@ function purchaseOrderForm(){
    ============================================================ */
 let expFilter={q:"",from:"",to:"",cat:""};
 function renderExpenses(){
-  addTopAction("➕ New Expense","btn-primary",()=>expenseForm());
+  addTopAction("➕ Add Spending","btn-primary",()=>expenseForm());
   addTopAction("⬇️ Export CSV","",()=>exportCSV("expenses"));
-  $("#content").innerHTML=`<div class="panel">
+  $("#content").innerHTML=moneyOutTabs("expenses") + `<div class="panel">
     <div class="filters">
       <div class="field search"><label>Search</label><input id="eQ" placeholder="Note / paid by..." value="${esc(expFilter.q)}"></div>
       <div class="field"><label>Category</label><select id="eCat"><option value="">All</option>${DATA.settings.expenseCategories.map(x=>`<option ${expFilter.cat===x?"selected":""}>${esc(x)}</option>`).join("")}</select></div>
