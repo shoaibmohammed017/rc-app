@@ -365,10 +365,10 @@ function rangeFilter(arr, from, to){
    ROUTER
    ============================================================ */
 const VIEWS = {
-  dashboard:{title:"Home", render:renderDashboard},
+  dashboard:{title:"Dashboard", render:renderDashboard},
   sales:{title:"Sales", render:renderSales},
-  purchases:{title:"Money Out", render:renderPurchases},
-  expenses:{title:"Money Out", render:renderExpenses},
+  purchases:{title:"Purchases", render:renderPurchases},
+  expenses:{title:"Expenses", render:renderExpenses},
   inventory:{title:"Inventory", render:renderInventory},
   customers:{title:"Customers", render:renderCustomers},
   suppliers:{title:"Suppliers", render:renderSuppliers},
@@ -380,15 +380,13 @@ const VIEWS = {
 };
 let currentView = "dashboard";
 
-const PRIMARY_TABS = ["dashboard","sales","inventory","purchases","expenses"];
+const PRIMARY_TABS = ["dashboard","sales","purchases","expenses"];
 function go(view){
   if(staffMode && view!=="staffhome"){ view="staffhome"; }   // staff are locked to their own dashboard
   if(view==="settings" && !isAdmin()){ toast("Only admins can open Settings","err"); view="dashboard"; }
   if(view==="approvals" && !isAdmin()){ view="dashboard"; }
   currentView = view;
-  // "Money Out" groups purchases + expenses under one nav item (data-view="purchases")
-  const navKey = (view==="expenses") ? "purchases" : view;
-  $$(".nav-item").forEach(b=>b.classList.toggle("active", b.dataset.view===navKey));
+  $$(".nav-item").forEach(b=>b.classList.toggle("active", b.dataset.view===view));
   // bottom-nav "More" lights up for any non-primary view
   const moreBtn = $("#moreBtn");
   if(moreBtn) moreBtn.classList.toggle("active", !PRIMARY_TABS.includes(view));
@@ -427,6 +425,7 @@ function closeSheet(){ /* the More/quick-add sheet reuses the modal; closeModal 
 
 /* ---------- Mobile: More sheet + Quick-add ---------- */
 const MORE_LINKS = [
+  {view:"inventory", icon:"🚗", label:"Inventory", sub:"Stock & products"},
   {view:"customers", icon:"👥", label:"Customers", sub:"Who buys from you"},
   {view:"suppliers", icon:"🏭", label:"Suppliers", sub:"Who you buy from"},
   {view:"staff", icon:"🧑‍🔧", label:"Staff", sub:"Your team"},
@@ -472,44 +471,40 @@ function openQuickAdd(){
 /* fields: [{name,label,type,options,value,required,step,full,placeholder}] */
 function buildForm(fields, onSubmit, submitLabel="Save"){
   const formId = uid("f");
-  const renderField = (f)=>{
+  let html = `<form id="${formId}"><div class="form-grid">`;
+  fields.forEach(f=>{
     const full = f.full ? " full" : "";
     const req = f.required ? "required" : "";
     const val = f.value==null? "" : esc(f.value);
-    let h = `<div class="field${full}"><label>${esc(f.label)}${f.required?" *":""}</label>`;
+    html += `<div class="field${full}"><label>${esc(f.label)}${f.required?" *":""}</label>`;
     if(f.type==="select"){
-      h += `<select name="${f.name}" ${f.addable?`data-addable="${esc(f.addable)}"`:""} ${req}>`;
-      if(f.placeholder) h += `<option value="">${esc(f.placeholder)}</option>`;
+      html += `<select name="${f.name}" ${f.addable?`data-addable="${esc(f.addable)}"`:""} ${req}>`;
+      if(f.placeholder) html += `<option value="">${esc(f.placeholder)}</option>`;
       (f.options||[]).forEach(o=>{
         const ov = typeof o==="object"? o.value : o;
         const ol = typeof o==="object"? o.label : o;
-        h += `<option value="${esc(ov)}" ${String(ov)===String(f.value)?"selected":""}>${esc(ol)}</option>`;
+        html += `<option value="${esc(ov)}" ${String(ov)===String(f.value)?"selected":""}>${esc(ol)}</option>`;
       });
-      if(f.addable) h += `<option value="__ADDNEW__">➕ Add new…</option>`;
-      h += `</select>`;
-      if(f.addable) h += `<span class="add-hint">Choose “Add new…” to create &amp; save an option</span>`;
+      if(f.addable) html += `<option value="__ADDNEW__">➕ Add new…</option>`;
+      html += `</select>`;
+      if(f.addable) html += `<span class="add-hint">Choose “Add new…” to create &amp; save an option</span>`;
     } else if(f.type==="combo"){
       // text input with a dropdown of suggestions (type anything, or pick an existing value)
       const dlid="dl_"+f.name+"_"+formId;
-      h += `<input type="text" name="${f.name}" value="${val}" placeholder="${esc(f.placeholder||"")}" list="${dlid}" ${req} autocomplete="off">`;
-      h += `<datalist id="${dlid}">${(f.options||[]).map(o=>`<option value="${esc(typeof o==="object"?o.value:o)}"></option>`).join("")}</datalist>`;
+      html += `<input type="text" name="${f.name}" value="${val}" placeholder="${esc(f.placeholder||"")}" list="${dlid}" ${req} autocomplete="off">`;
+      html += `<datalist id="${dlid}">${(f.options||[]).map(o=>`<option value="${esc(typeof o==="object"?o.value:o)}"></option>`).join("")}</datalist>`;
     } else if(f.type==="textarea"){
-      h += `<textarea name="${f.name}" placeholder="${esc(f.placeholder||"")}" ${req}>${val}</textarea>`;
+      html += `<textarea name="${f.name}" placeholder="${esc(f.placeholder||"")}" ${req}>${val}</textarea>`;
     } else {
       const step = f.type==="number"? `step="${f.step||"any"}"` : "";
-      h += `<input type="${f.type||"text"}" name="${f.name}" value="${val}" placeholder="${esc(f.placeholder||"")}" ${step} ${req}>`;
+      html += `<input type="${f.type||"text"}" name="${f.name}" value="${val}" placeholder="${esc(f.placeholder||"")}" ${step} ${req}>`;
     }
-    h += `</div>`;
-    return h;
-  };
-  // fields tagged adv:true tuck into an optional "More details" drawer, so the form stays short
-  const core = fields.filter(f=>!f.adv), adv = fields.filter(f=>f.adv);
-  let html = `<form id="${formId}"><div class="form-grid">${core.map(renderField).join("")}</div>`;
-  if(adv.length) html += `<details class="form-more"><summary>➕ More details (optional)</summary><div class="form-grid">${adv.map(renderField).join("")}</div></details>`;
+    html += `</div>`;
+  });
   html += `<div class="form-actions">
       <button type="button" class="btn btn-ghost" onclick="closeModal()">Cancel</button>
       <button type="submit" class="btn btn-primary">${esc(submitLabel)}</button>
-    </div></form>`;
+    </div></div></form>`;
   openModal(arguments[3]||"Form", html);
   const form = $("#"+formId);
   // inline "Add new…" handling for editable dropdowns
@@ -643,6 +638,7 @@ function waAutoInPeriod(){ const orders = onlineInPeriod().length; const rate = 
 function waTotalInPeriod(){ return waAutoInPeriod().total + waChargesInPeriod().total; }
 
 /* ---- Auto-reduce inventory from Shiprocket online orders ---- */
+function prodPickLabel(p){ return (p.name||"Item") + (p.color? " ("+p.color+")":""); }
 function autoMatchSku(sku,name){
   if(sku){ const p=DATA.products.find(x=>(x.sku||"").toLowerCase()===String(sku).toLowerCase()); if(p) return p.id; }
   if(name){ const p=DATA.products.find(x=>(x.name||"").toLowerCase()===String(name).toLowerCase()); if(p) return p.id; }
@@ -690,10 +686,16 @@ function renderDashboard(){
   const allSales     = inPeriod(DATA.sales);
   const storeSales   = allSales.filter(s=>!isOnline(s));             // in-store / walk-in
   const manualOnline = allSales.filter(isOnline);                    // WhatsApp/Instagram/etc. entered by hand (not via Shiprocket)
+  const purchases = inPeriod(DATA.purchases), expenses = inPeriod(DATA.expenses);
   const shipOnline = onlineSales(onlineInPeriod());                  // Shiprocket orders in period (excl. cancelled + returned)
+  const sales    = allSales;                                         // charts/lists use every manual sale (store + manual online)
   const storeTot = sumBy(storeSales, saleTotal);
   const onlineTot= sumBy(manualOnline, saleTotal) + sumBy(shipOnline, orderVal);
   const salesTot = storeTot + onlineTot;
+  const purTot   = sumBy(purchases, purchaseTotal);
+  const expTot   = sumBy(expenses, e=>e.amount);
+  // Money still on the way = Shiprocket COD owed + any manual online sale not yet paid
+  const codPending = sumBy(codOnTheWay(), orderVal) + sumBy(DATA.sales.filter(s=>isOnline(s)&&saleDue(s)>0), saleDue);
   const low = lowStockProducts();
 
   const chips=[["today","Today"],["thisMonth","This month"],["lastMonth","Last month"],["last7","Last 7 days"],["last6m","Last 6 months"],["thisYear","This year"],["custom","Custom"]];
@@ -703,14 +705,48 @@ function renderDashboard(){
   if(selectedPeriod==="custom"){
     html += `<div class="form-grid" style="margin:0 0 14px"><div class="field"><label>From</label><input type="date" id="pcFrom" value="${customRange.from||""}"></div><div class="field"><label>To</label><input type="date" id="pcTo" value="${customRange.to||""}"></div></div>`;
   }
-  const onlineCount = shipOnline.length + manualOnline.length;
   html += `<div class="kpi-grid">
-    ${K("green","psales","Total Sales",money(salesTot),esc(R.label))}
-    ${K("cyan","offline","🏪 Offline",money(storeTot),`${storeSales.length} sale${storeSales.length!==1?"s":""}`)}
-    ${K("amber","online","🌐 Online",money(onlineTot),`${onlineCount} order${onlineCount!==1?"s":""}`)}
-    ${K(low.length?"red":"green","stockpending","📦 Stock pending",num(low.length),low.length?"low / out of stock":"all in stock")}
+    ${K("green","psales","Total Sales",money(salesTot),`🏪 ${money(storeTot)} · 🌐 ${money(onlineTot)}`)}
+    ${K("amber","ppurchases","Stock Purchases",money(purTot),`${esc(R.label)} · ${purchases.length}`)}
+    ${K("red","pexpenses","Expenses",money(expTot),`${esc(R.label)} · ${expenses.length}`)}
   </div>`;
+  html += `<div class="kpi cod-card kpi-click" data-kpi="cod" role="button" tabindex="0"><div class="kpi-label">🚚 COD money on the way</div><div class="kpi-value">${money(codPending)}</div><div class="kpi-sub">Shiprocket will pay this into your account · tap to see ›</div></div>`;
+  const srC = onlineChargesInPeriod();
+  const waTot = waTotalInPeriod();
+  const srGrand = srC.total + waTot;
+  if(srGrand>0 || ONLINE_CHARGES.length || (DATA.waCharges&&DATA.waCharges.length)){
+    const waBit = waTot>0 ? ` · 📱 ${money(waTot)} WhatsApp` : "";
+    html += `<div class="kpi ship-card kpi-click" data-kpi="srcharges" role="button" tabindex="0"><div class="kpi-label">📦 Shiprocket charges — ${esc(R.label)}</div><div class="kpi-value">${money(srGrand)}</div><div class="kpi-sub">🚚 ${money(srC.freight)} freight · 💵 ${money(srC.cod)} COD fee · ↩️ ${money(srC.rto)} returns${waBit} · tap to see ›</div></div>`;
+  }
+  html += `<div class="sync-bar"><button class="btn btn-sm" id="syncOnlineBtn">🔄 Sync online orders</button><span class="sync-note" id="syncNote"></span></div>`;
+  if(low.length){
+    html += `<div class="alert">⚠️ <strong>${low.length}</strong> item(s) low on stock: ${low.slice(0,4).map(p=>esc(p.name)).join(", ")}${low.length>4?"…":""}</div>`;
+  }
   html += `<div class="home-actions"><button class="btn btn-primary btn-lg" onclick="saleForm()">➕ Record a Sale</button><button class="btn btn-lg" onclick="productBulkForm()">📦 Add Stock</button></div>`;
+
+  // Current month chart
+  html += `<div class="grid-3">
+    <div class="panel">
+      <div class="panel-head"><h3>This Month — Revenue vs Spending</h3><span class="li-sub" id="monthLabel"></span></div>
+      <div id="monthChart"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h3>Top Selling Products</h3></div>
+      <div id="topProducts"></div>
+    </div>
+  </div>`;
+
+  // Recent activity + channels
+  html += `<div class="grid-2">
+    <div class="panel">
+      <div class="panel-head"><h3>Recent Sales</h3><button class="btn btn-sm" onclick="go('sales')">View all</button></div>
+      <div id="recentSales"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h3>Sales by Channel</h3></div>
+      <div id="channelChart"></div>
+    </div>
+  </div>`;
 
   c.innerHTML = html;
 
@@ -722,6 +758,74 @@ function renderDashboard(){
   // period chips → change window & re-render
   $$(".pchip").forEach(b=>b.onclick=()=>{ buzz(); selectedPeriod=b.dataset.period; try{localStorage.setItem("rc_period",selectedPeriod);}catch(e){} renderDashboard(); });
   ["pcFrom","pcTo"].forEach(id=>{ const el=$("#"+id); if(el) el.onchange=()=>{ customRange={from:($("#pcFrom").value||""),to:($("#pcTo").value||"")}; renderDashboard(); }; });
+  // Online-orders sync (Shiprocket)
+  const syncBtn=$("#syncOnlineBtn"), syncNote=$("#syncNote");
+  if(syncNote) syncNote.textContent = onlineSyncedAt ? ("Last synced "+fmtWhen(onlineSyncedAt)) : "Not synced yet — tap to pull Shiprocket orders";
+  if(syncBtn) syncBtn.onclick=async ()=>{ buzz(); syncBtn.disabled=true; const old=syncBtn.textContent; syncBtn.textContent="⏳ Syncing…"; const ok=await syncOnline(false); syncBtn.disabled=false; syncBtn.textContent=old; if(ok && currentView==="dashboard") renderDashboard(); };
+
+  // Current month chart — week-by-week revenue vs spending
+  const mk = monthKey(today());
+  const now = new Date();
+  $("#monthLabel").textContent = now.toLocaleDateString("en-IN",{month:"long",year:"numeric"});
+  const weekOf = (d)=> Math.floor((Number((d||"").slice(8,10))-1)/7); // 0..4
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate();
+  const weekCount = Math.ceil(daysInMonth/7);
+  const wkRev = Array(weekCount).fill(0), wkSpend = Array(weekCount).fill(0);
+  DATA.sales.filter(s=>monthKey(s.date)===mk).forEach(s=>{ wkRev[weekOf(s.date)] += saleTotal(s); });
+  onlineSales(ONLINE_ORDERS).filter(o=>monthKey(o.order_ymd)===mk).forEach(o=>{ wkRev[weekOf(o.order_ymd)] += orderVal(o); });
+  DATA.expenses.filter(e=>monthKey(e.date)===mk).forEach(e=>{ wkSpend[weekOf(e.date)] += Number(e.amount)||0; });
+  DATA.purchases.filter(p=>monthKey(p.date)===mk).forEach(p=>{ wkSpend[weekOf(p.date)] += purchaseTotal(p); });
+  const maxv = Math.max(1,...wkRev,...wkSpend);
+  const monthRev = wkRev.reduce((a,b)=>a+b,0), monthSpend = wkSpend.reduce((a,b)=>a+b,0);
+  let mc = `<div class="bar-row"><div class="lbl" style="font-weight:700;color:var(--text)">Total ▲ in</div>
+      <div class="bar-track"><div class="bar-fill green" style="width:${monthRev/Math.max(maxv,monthRev,monthSpend)*100}%"></div></div>
+      <div class="val pos">${money(monthRev)}</div></div>
+    <div class="bar-row"><div class="lbl" style="font-weight:700;color:var(--text)">Total ▼ out</div>
+      <div class="bar-track"><div class="bar-fill red" style="width:${monthSpend/Math.max(maxv,monthRev,monthSpend)*100}%"></div></div>
+      <div class="val neg">${money(monthSpend)}</div></div>
+    <div style="height:1px;background:var(--line);margin:12px 0"></div>`;
+  for(let w=0; w<weekCount; w++){
+    mc += `<div class="bar-row"><div class="lbl">Wk ${w+1} ▲</div>
+        <div class="bar-track"><div class="bar-fill green" style="width:${wkRev[w]/maxv*100}%"></div></div>
+        <div class="val">${money(wkRev[w])}</div></div>
+      <div class="bar-row"><div class="lbl">Wk ${w+1} ▼</div>
+        <div class="bar-track"><div class="bar-fill red" style="width:${wkSpend[w]/maxv*100}%"></div></div>
+        <div class="val">${money(wkSpend[w])}</div></div>`;
+  }
+  $("#monthChart").innerHTML = (monthRev||monthSpend)? mc : `<div class="empty">No activity yet this month</div>`;
+
+  // Top products
+  const prodSales = {};
+  sales.forEach(s=>{
+    const name = (productById(s.productId)||{}).name || s.itemName || "Unknown";
+    prodSales[name] = (prodSales[name]||0) + (Number(s.qty)||0);
+  });
+  const top = Object.entries(prodSales).sort((a,b)=>b[1]-a[1]).slice(0,6);
+  const maxq = Math.max(1,...top.map(t=>t[1]));
+  $("#topProducts").innerHTML = top.length? top.map(([n,q])=>`
+    <div class="bar-row"><div class="lbl" style="width:120px">${esc(n)}</div>
+      <div class="bar-track"><div class="bar-fill" style="width:${q/maxq*100}%"></div></div>
+      <div class="val" style="width:50px">${q}</div></div>`).join("") : `<div class="empty">No sales yet</div>`;
+
+  // Recent sales
+  const recent = [...sales].sort((a,b)=>(b.date||"").localeCompare(a.date||"")).slice(0,6);
+  $("#recentSales").innerHTML = recent.length? recent.map(s=>{
+    const name = (productById(s.productId)||{}).name || s.itemName || "Item";
+    return `<div class="list-item"><div><div class="li-main">${esc(name)} ×${s.qty}</div>
+      <div class="li-sub">${fmtDate(s.date)} · ${esc(s.channel||"")} ${s.customer?("· "+esc(s.customer)):""}</div></div>
+      <div class="li-main pos">${money(saleTotal(s))}</div></div>`;
+  }).join("") : `<div class="empty">No sales yet</div>`;
+
+  // Channel chart
+  const byCh = {};
+  sales.forEach(s=>{ const ch=s.channel||"Store"; byCh[ch]=(byCh[ch]||0)+saleTotal(s); });
+  shipOnline.forEach(o=>{ const ch=onlineChannelLabel(o); byCh[ch]=(byCh[ch]||0)+orderVal(o); });
+  const chArr = Object.entries(byCh).sort((a,b)=>b[1]-a[1]);
+  const maxc = Math.max(1,...chArr.map(c=>c[1]));
+  $("#channelChart").innerHTML = chArr.length? chArr.map(([n,v])=>`
+    <div class="bar-row"><div class="lbl" style="width:120px">${esc(n)}</div>
+      <div class="bar-track"><div class="bar-fill" style="width:${v/maxc*100}%"></div></div>
+      <div class="val">${money(v)}</div></div>`).join("") : `<div class="empty">No sales yet</div>`;
 }
 
 /* ---------- Dashboard KPI detail sheets ---------- */
@@ -770,53 +874,9 @@ window.openKpiDetail=(key)=>{
       + statRow("   • Shiprocket COD (remits later)", money(shipCod))
       + (manualTot>0?statRow("   • Other online (WhatsApp etc.)", money(manualTot)):"")
       + statRow("   • Delivered / In transit / Returned", num(delivered)+" / "+num(transit)+" / "+num(rto))
+      + `<div style="margin:12px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button class="btn btn-sm" onclick="openStockMapping()">🔗 Auto-reduce stock${(()=>{const u=unmatchedOnlineSkus().length; return u?` (${u} to match)`:(DATA.settings.autoOnlineStock?" · on":"");})()}</button></div>`
       + sec("Recent online orders")
-      + kpiList(recent.map(o=>({main:esc(o.customer_name||"Customer")+" · "+esc(o.channel_order_id||""), sub:fmtDate(o.order_ymd)+" · "+esc(o.status||"")+" · "+(o.payment_method==="cod"?"COD":"Prepaid"), val:money(orderVal(o)), cls:"pos"})), on.length?"":"No Shiprocket orders in this period — tap “Sync” on the Online card");
-  }
-  else if(key==="offline"){
-    const R=periodRange(selectedPeriod);
-    const store=inPeriod(DATA.sales).filter(s=>!isOnline(s));
-    const recent=[...store].sort((a,b)=>(b.date||"").localeCompare(a.date||"")).slice(0,15);
-    title="Offline (store) sales — "+R.label;
-    body = statRow("Total offline sales", money(sumBy(store,saleTotal)), true)
-      + statRow("Number of sales", num(store.length))
-      + sec("Recent store sales")
-      + kpiList(recent.map(s=>({main:esc((productById(s.productId)||{}).name||s.itemName||"Item")+" ×"+num(s.qty), sub:fmtDate(s.date)+" · "+esc(s.customer||"Walk-in"), val:money(saleTotal(s)), cls:"pos", go:"sales"})), "No store sales in this period");
-  }
-  else if(key==="online"){
-    const R=periodRange(selectedPeriod);
-    const manual=inPeriod(DATA.sales).filter(isOnline);
-    const on=onlineSales(onlineInPeriod());
-    const manualTot=sumBy(manual,saleTotal), shipTot=sumBy(on,orderVal);
-    const shipPrepaid=sumBy(on.filter(o=>o.payment_method!=="cod"),orderVal);
-    const shipCod=sumBy(on.filter(o=>o.payment_method==="cod"),orderVal);
-    const codPending=sumBy(codOnTheWay(),orderVal)+sumBy(DATA.sales.filter(s=>isOnline(s)&&saleDue(s)>0),saleDue);
-    const srGrand=onlineChargesInPeriod().total + waTotalInPeriod();
-    const delivered=on.filter(o=>o.is_delivered).length, transit=Math.max(0,on.length-delivered);
-    const rto=onlineInPeriod().filter(o=>!o.is_cancelled && o.is_rto).length;
-    const recent=[...on].sort((a,b)=>(b.order_ymd||"").localeCompare(a.order_ymd||"")).slice(0,8);
-    title="Online sales — "+R.label;
-    body = statRow("Total online sales", money(manualTot+shipTot), true)
-      + statRow("Shiprocket prepaid (in account)", money(shipPrepaid))
-      + statRow("Shiprocket COD (remits later)", money(shipCod))
-      + (manualTot>0?statRow("Other online (WhatsApp etc.)", money(manualTot)):"")
-      + statRow("Delivered / In transit / Returned", num(delivered)+" / "+num(transit)+" / "+num(rto))
-      + sec("Money & charges")
-      + `<div class="kpi-detail-list">`
-        + `<div class="kpi-di" role="button" tabindex="0" onclick="openKpiDetail('cod')"><div><div class="li-main">🚚 COD money on the way</div><div class="li-sub">tap to see orders ›</div></div><div class="kpi-di-val">${money(codPending)}</div></div>`
-        + `<div class="kpi-di" role="button" tabindex="0" onclick="openKpiDetail('srcharges')"><div><div class="li-main">📦 Shiprocket charges</div><div class="li-sub">freight · COD fee · returns · WhatsApp ›</div></div><div class="kpi-di-val neg">${money(srGrand)}</div></div>`
-      + `</div>`
-      + `<div style="margin:12px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button class="btn btn-sm" onclick="syncOnlineNow()">🔄 Sync online orders</button><button class="btn btn-sm" onclick="openStockMapping()">🔗 Auto-reduce stock${(()=>{const u=unmatchedOnlineSkus().length; return u?` (${u} to match)`:(DATA.settings.autoOnlineStock?" · on":"");})()}</button></div><div class="sync-note" style="margin:-4px 0 6px">${onlineSyncedAt?("Last synced "+esc(fmtWhen(onlineSyncedAt))):"not synced yet"}</div>`
-      + sec("Recent online orders")
-      + kpiList(recent.map(o=>({main:esc(o.customer_name||"Customer")+" · "+esc(o.channel_order_id||""), sub:fmtDate(o.order_ymd)+" · "+esc(o.status||"")+" · "+(o.payment_method==="cod"?"COD":"Prepaid"), val:money(orderVal(o)), cls:"pos"})), on.length?"":"No online orders in this period");
-  }
-  else if(key==="stockpending"){
-    const low=lowStockProducts().sort((a,b)=>stockOf(a)-stockOf(b));
-    title="Stock pending";
-    body = statRow("Items low / out of stock", num(low.length), true)
-      + `<div class="kpi-note">Items at or below their reorder level. Tap one to open Inventory and restock.</div>`
-      + sec("Restock these")
-      + kpiList(low.map(p=>({main:esc(p.name)+(p.color?" ("+esc(p.color)+")":""), sub:"in stock: "+num(stockOf(p))+" · reorder at "+num(p.reorder||DATA.settings.lowStockDefault), val:num(stockOf(p)), cls:stockOf(p)<=0?"neg":"", go:"inventory"})), "Everything is well stocked 🎉");
+      + kpiList(recent.map(o=>({main:esc(o.customer_name||"Customer")+" · "+esc(o.channel_order_id||""), sub:fmtDate(o.order_ymd)+" · "+esc(o.status||"")+" · "+(o.payment_method==="cod"?"COD":"Prepaid"), val:money(orderVal(o)), cls:"pos"})), on.length?"":"No Shiprocket orders in this period — tap “Sync online orders” on Home");
   }
   else if(key==="ppurchases"){
     const pp=inPeriod(DATA.purchases), R=periodRange(selectedPeriod);
@@ -989,7 +1049,6 @@ window.openKpiDetail=(key)=>{
 
 // Add / edit a manual WhatsApp (or other) Shiprocket charge, then return to the drill-down.
 function refreshSrChargesDetail(){ if(currentView==="dashboard"){ renderDashboard(); openKpiDetail("srcharges"); } else { closeModal(); } }
-window.syncOnlineNow=async ()=>{ await syncOnline(false); if(currentView==="dashboard") renderDashboard(); openKpiDetail("online"); };
 // Match website product SKUs to inventory items + toggle auto stock-reduction.
 window.openStockMapping=()=>{
   const skus=distinctOnlineSkus();
@@ -1113,60 +1172,47 @@ function drawSales(){
   ];
   $("#salesTable").innerHTML = tableHTML(cols, rows);
 }
-// One combo field does both: pick from inventory OR type a custom name.
-function prodPickLabel(p){ return (p.name||"Item") + (p.color? " ("+p.color+")":""); }
-function resolveSaleProduct(text){
-  const t=(text||"").trim();
-  if(!t) return {productId:null, itemName:""};
-  let hit = DATA.products.find(p=>prodPickLabel(p).toLowerCase()===t.toLowerCase());
-  if(!hit) hit = DATA.products.find(p=>(p.name||"").toLowerCase()===t.toLowerCase());
-  return hit ? {productId:hit.id, itemName:null} : {productId:null, itemName:t};
-}
-function defaultChannel(){ const off=DATA.settings.offlineChannels||["Shop / Walk-in"]; return (DATA.settings.saleChannels||[]).find(c=>off.includes(c)) || (DATA.settings.saleChannels||[])[0] || "Shop / Walk-in"; }
 function saleForm(id){
-  const s = id? DATA.sales.find(x=>x.id===id) : {date:today(),qty:1,staff:me().name};
-  const prodOpts = DATA.products.map(p=>({value:prodPickLabel(p)}));
-  const curProd = id ? (s.productId ? prodPickLabel(productById(s.productId)||{}) : (s.itemName||"")) : "";
+  const s = id? DATA.sales.find(x=>x.id===id) : {date:today(),qty:1,payStatus:"Paid",discount:0,paid:0,staff:me().name};
   buildForm([
-    // --- the 4 essentials (visible) ---
-    {name:"product",label:"Product",type:"combo",value:curProd,options:prodOpts,required:true,placeholder:"Pick from stock, or type a custom item"},
-    {name:"qty",label:"Quantity",type:"number",step:"1",value:s.qty||1,required:true},
-    {name:"price",label:"Selling price",type:"number",value:s.price,required:true},
-    {name:"paid",label:"Amount received",type:"number",value:(id?s.paid:""),placeholder:"Blank = full amount (Paid)"},
-    // --- optional, tucked into "More details" ---
-    {name:"customer",label:"Customer",value:s.customer,placeholder:"Name (optional)",adv:true},
-    {name:"channel",label:"Sold where",type:"select",value:s.channel||(id?"":defaultChannel()),options:DATA.settings.saleChannels,placeholder:"Select",addable:"saleChannels",adv:true},
-    {name:"date",label:"Date",type:"date",value:s.date||today(),adv:true},
-    {name:"discount",label:"Discount (total ₹)",type:"number",value:s.discount,adv:true},
-    ...(DATA.settings.enableGST?[{name:"gstRate",label:`GST % ${DATA.settings.gstInclusive?"(incl.)":"(on top)"}`,type:"number",value:s.gstRate!=null?s.gstRate:DATA.settings.gstRate,adv:true}]:[]),
-    {name:"staff",label:"Sold by",type:"select",value:s.staff,options:DATA.staff.map(x=>x.name),placeholder:"Staff",addable:"staff",adv:true},
-    {name:"notes",label:"Notes",type:"textarea",value:s.notes,full:true,adv:true}
+    {name:"date",label:"Date",type:"date",value:s.date,required:true},
+    {name:"productId",label:"Product (from inventory)",type:"select",value:s.productId,placeholder:"— Select / or type below —",
+      options:DATA.products.map(p=>({value:p.id,label:`${prodLabel(p)} (stock ${stockOf(p)})`}))},
+    {name:"itemName",label:"Or item name (if not in inventory)",value:s.itemName,placeholder:"e.g. Custom RC build"},
+    {name:"qty",label:"Quantity",type:"number",step:"1",value:s.qty,required:true},
+    {name:"price",label:"Selling price (per unit)",type:"number",value:s.price,required:true},
+    {name:"cost",label:"Cost price/unit (for profit)",type:"number",value:s.costAtSale,placeholder:"Auto-filled if product picked"},
+    {name:"discount",label:"Discount (total)",type:"number",value:s.discount},
+    ...(DATA.settings.enableGST?[{name:"gstRate",label:`GST % ${DATA.settings.gstInclusive?"(price incl.)":"(added on top)"}`,type:"number",value:s.gstRate!=null?s.gstRate:DATA.settings.gstRate}]:[]),
+    {name:"channel",label:"Sold where (channel)",type:"select",value:s.channel,options:DATA.settings.saleChannels,placeholder:"Select",addable:"saleChannels"},
+    {name:"customer",label:"Customer",value:s.customer,placeholder:"Name (optional)"},
+    {name:"staff",label:"Sold by (staff)",type:"select",value:s.staff,options:DATA.staff.map(x=>x.name),placeholder:"Who made the sale",addable:"staff"},
+    {name:"payStatus",label:"Payment status",type:"select",value:s.payStatus,options:["Paid","Partial","Due"]},
+    {name:"paid",label:"Amount received",type:"number",value:s.paid},
+    {name:"notes",label:"Notes",type:"textarea",value:s.notes,full:true}
   ], (o)=>{
-    const res = resolveSaleProduct(o.product);
-    o.productId = res.productId; o.itemName = res.itemName; delete o.product;
     if(!o.productId && !o.itemName){ toast("Pick a product or type an item name","err"); return; }
-    o.qty=Number(o.qty)||1; o.price=Number(o.price); o.discount=Number(o.discount)||0;
+    o.qty=Number(o.qty); o.price=Number(o.price); o.discount=Number(o.discount)||0; o.paid=Number(o.paid)||0;
     if(!(o.qty>0)){ toast("Enter a quantity greater than 0","err"); return; }
     if(!(o.price>=0)){ toast("Enter a valid selling price","err"); return; }
-    if(!o.date) o.date=today();
-    if(!o.channel) o.channel=defaultChannel();
-    if(!o.staff) o.staff=me().name;
     if(o.gstRate!=null && o.gstRate!=="") o.gstRate=Number(o.gstRate);
-    // one selling price; cost comes from inventory (custom items have no cost → no profit)
+    // freeze cost-at-sale: product cost if picked, else the typed cost (for one-off items)
     const prod = productById(o.productId);
-    o.costAtSale = prod ? (Number(prod.cost)||0) : 0;
-    // amount received: blank = full. payment status is derived, not asked.
+    o.costAtSale = prod ? (Number(prod.cost)||0) : (Number(o.cost)||0);
+    delete o.cost;
+    // reconcile paid against the GST-inclusive grand total based on status
     const grand = saleGrand(o);
-    let paid = (o.paid===""||o.paid==null) ? grand : (Number(o.paid)||0);
-    paid = Math.min(Math.max(0,paid), grand);
-    o.paid = paid;
-    o.payStatus = paid>=grand ? "Paid" : (paid>0 ? "Partial" : "Due");
+    if(o.payStatus==="Paid") o.paid = grand;
+    else if(o.payStatus==="Due") o.paid = 0;
+    else o.paid = Math.min(Math.max(0,o.paid), grand); // Partial: clamp 0..grand
     o.updatedAt = nowISO();
     if(id){
+      // revert OLD stock (captured before mutation) then apply NEW
       const old = DATA.sales.find(x=>x.id===id);
-      adjustStock(old.productId, +(Number(old.qty)||0));   // revert old stock
+      const prevPid = old.productId, prevQty = Number(old.qty)||0;
+      adjustStock(prevPid, +prevQty);
       Object.assign(old,o);
-      adjustStock(o.productId, -(Number(o.qty)||0));        // apply new
+      adjustStock(o.productId, -(Number(o.qty)||0));
     }else{
       o.id=nextId();
       DATA.sales.push(o);
@@ -1182,17 +1228,10 @@ function saleForm(id){
    PURCHASES
    ============================================================ */
 let purFilter={q:"",from:"",to:""};
-// Money Out = Stock In (purchases) + Spending (expenses), shown with a shared tab bar.
-function moneyOutTabs(active){
-  return `<div class="mo-tabs">
-    <button class="mo-tab ${active==='purchases'?'active':''}" onclick="go('purchases')">📦 Stock In</button>
-    <button class="mo-tab ${active==='expenses'?'active':''}" onclick="go('expenses')">🧾 Spending</button>
-  </div>`;
-}
 function renderPurchases(){
-  addTopAction("➕ Add Stock Purchase","btn-primary",()=>purchaseOrderForm());
+  addTopAction("➕ New Purchase","btn-primary",()=>purchaseOrderForm());
   addTopAction("⬇️ Export CSV","",()=>exportCSV("purchases"));
-  $("#content").innerHTML = moneyOutTabs("purchases") + `<div class="panel">
+  $("#content").innerHTML = `<div class="panel">
     <div class="filters">
       <div class="field search"><label>Search</label><input id="pQ" placeholder="Product / supplier / staff..." value="${esc(purFilter.q)}"></div>
       <div class="field"><label>From</label><input type="date" id="pFrom" value="${purFilter.from}"></div>
@@ -1414,9 +1453,9 @@ function purchaseOrderForm(){
    ============================================================ */
 let expFilter={q:"",from:"",to:"",cat:""};
 function renderExpenses(){
-  addTopAction("➕ Add Spending","btn-primary",()=>expenseForm());
+  addTopAction("➕ New Expense","btn-primary",()=>expenseForm());
   addTopAction("⬇️ Export CSV","",()=>exportCSV("expenses"));
-  $("#content").innerHTML=moneyOutTabs("expenses") + `<div class="panel">
+  $("#content").innerHTML=`<div class="panel">
     <div class="filters">
       <div class="field search"><label>Search</label><input id="eQ" placeholder="Note / paid by..." value="${esc(expFilter.q)}"></div>
       <div class="field"><label>Category</label><select id="eCat"><option value="">All</option>${DATA.settings.expenseCategories.map(x=>`<option ${expFilter.cat===x?"selected":""}>${esc(x)}</option>`).join("")}</select></div>

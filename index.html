@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>PRC Sales App</title>
-<link rel="stylesheet" href="styles.css?v=36" />
+<link rel="stylesheet" href="styles.css?v=37" />
 <!-- PWA -->
 <link rel="manifest" href="manifest.json" />
 <meta name="theme-color" content="#000000" />
@@ -37,11 +37,11 @@
       </div>
     </div>
     <nav class="nav" id="nav">
-      <button class="nav-item active" data-view="dashboard"><span>🏠</span> Home</button>
+      <button class="nav-item active" data-view="dashboard"><span>📊</span> Dashboard</button>
       <button class="nav-item" data-view="sales"><span>💰</span> Sales</button>
+      <button class="nav-item" data-view="purchases"><span>📦</span> Purchases</button>
+      <button class="nav-item" data-view="expenses"><span>🧾</span> Expenses</button>
       <button class="nav-item" data-view="inventory"><span>🚗</span> Inventory</button>
-      <button class="nav-item" data-view="purchases"><span>💸</span> Money Out</button>
-      <div class="nav-sep">More</div>
       <button class="nav-item" data-view="customers"><span>👥</span> Customers</button>
       <button class="nav-item" data-view="suppliers"><span>🏭</span> Suppliers</button>
       <button class="nav-item" data-view="staff"><span>🧑‍🔧</span> Staff</button>
@@ -69,10 +69,10 @@
   <!-- Bottom nav (mobile) -->
   <nav class="bottomnav" id="bottomNav">
     <div class="inner">
-      <button class="bn-item nav-item active" data-view="dashboard"><span class="bn-ico">🏠</span>Home<i class="bn-dot"></i></button>
+      <button class="bn-item nav-item active" data-view="dashboard"><span class="bn-ico">📊</span>Home<i class="bn-dot"></i></button>
       <button class="bn-item nav-item" data-view="sales"><span class="bn-ico">💰</span>Sales<i class="bn-dot"></i></button>
-      <button class="bn-item nav-item" data-view="inventory"><span class="bn-ico">🚗</span>Stock<i class="bn-dot"></i></button>
-      <button class="bn-item nav-item" data-view="purchases"><span class="bn-ico">💸</span>Money<i class="bn-dot"></i></button>
+      <button class="bn-item nav-item" data-view="purchases"><span class="bn-ico">📦</span>Buy<i class="bn-dot"></i></button>
+      <button class="bn-item nav-item" data-view="expenses"><span class="bn-ico">🧾</span>Spend<i class="bn-dot"></i></button>
       <button class="bn-item" id="moreBtn"><span class="bn-ico">⋯</span>More<i class="bn-dot"></i></button>
     </div>
   </nav>
@@ -110,7 +110,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="config.js"></script>
-<script src="app.js?v=36"></script>
+<script src="app.js?v=37"></script>
 <script>
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => {

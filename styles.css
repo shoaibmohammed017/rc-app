@@ -157,22 +157,6 @@ td.num,th.num{ text-align:right }
   box-shadow:0 0 0 3px rgba(245,158,11,.25) }
 .field textarea{ resize:vertical; min-height:84px }
 .form-actions{ display:flex; gap:10px; justify-content:flex-end; margin-top:18px; grid-column:1/-1 }
-.form-more{ margin-top:14px; border-top:1px solid var(--line); padding-top:10px }
-.form-more>summary{ cursor:pointer; font-size:12px; font-weight:800; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; list-style:none; padding:4px 0; user-select:none }
-.form-more>summary::-webkit-details-marker{ display:none }
-.form-more[open]>summary{ margin-bottom:12px }
-.form-more>.form-grid{ margin-top:4px }
-.mo-tabs{ display:flex; gap:8px; margin-bottom:16px }
-.mo-tab{ flex:1; padding:12px; border:1px solid var(--line); background:var(--surface); border-radius:12px; font-weight:800; font-size:14px; cursor:pointer; color:var(--muted) }
-.mo-tab.active{ background:var(--primary); color:#000; border-color:var(--primary) }
-.mo-tab:active{ transform:scale(.98) }
-.nav-sep{ font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); padding:14px 12px 6px; opacity:.6 }
-.map-list{ display:flex; flex-direction:column; margin:8px 0 }
-.map-row{ display:flex; align-items:center; gap:12px; padding:10px 4px; border-bottom:1px solid var(--line-soft) }
-.map-row .map-sku{ flex:1; min-width:0 }
-.map-row select{ max-width:48%; padding:9px; border-radius:9px; background:var(--surface); border:1px solid var(--line); color:var(--text); font-size:13px }
-.map-toggle{ display:flex; align-items:center; gap:10px; padding:12px 14px; background:var(--surface-2); border:1px solid var(--line); border-radius:10px; margin:10px 0; font-weight:700; font-size:14px; cursor:pointer }
-.map-toggle input{ width:18px; height:18px; flex:none }
 
 /* ---------- Filters ---------- */
 .filters{ display:flex; gap:10px; flex-wrap:wrap; align-items:end; margin-bottom:14px }
@@ -414,3 +398,10 @@ body.staff-mode #hamburger{ display:none !important }
 .kpi-detail-list{ display:flex; flex-direction:column }
 .kpi-di{ display:flex; justify-content:space-between; align-items:center; gap:10px; padding:11px 4px; border-bottom:1px solid var(--line-soft) }
 .kpi-di[role="button"]{ cursor:pointer } .kpi-di[role="button"]:active{ background:var(--surface-2) }
+/* Online stock — product matching modal */
+.map-list{ display:flex; flex-direction:column; margin:8px 0 }
+.map-row{ display:flex; align-items:center; gap:12px; padding:10px 4px; border-bottom:1px solid var(--line-soft) }
+.map-row .map-sku{ flex:1; min-width:0 }
+.map-row select{ max-width:48%; padding:9px; border-radius:9px; background:var(--surface); border:1px solid var(--line); color:var(--text); font-size:13px }
+.map-toggle{ display:flex; align-items:center; gap:10px; padding:12px 14px; background:var(--surface-2); border:1px solid var(--line); border-radius:10px; margin:10px 0; font-weight:700; font-size:14px; cursor:pointer }
+.map-toggle input{ width:18px; height:18px; flex:none }
